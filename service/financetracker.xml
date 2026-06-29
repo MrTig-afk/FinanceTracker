@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!--
+  Task Scheduler task definition for the FinanceTracker backend.
+
+  The register-task.ps1 script replaces the __REPO_ROOT__ placeholder with the
+  absolute path to the repository before registering this task.  Do NOT edit the
+  placeholder manually; run the register script instead.
+
+  Security: RunLevel=LeastPrivilege — the task runs as the logged-in user without
+  elevation, which means the backend keeps running while the laptop is locked
+  (LogonTrigger + InteractiveToken user task).  No UAC prompt, no admin rights.
+
+  No secrets appear in this file.  All sensitive config is loaded from .env at
+  runtime by python-dotenv inside the Python process.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>FinanceTracker — always-on FastAPI backend (auto-start on login, auto-restart on crash)</Description>
+    <Version>1.0.0</Version>
+  </RegistrationInfo>
+
+  <Triggers>
+    <!-- Start automatically when the user logs in (FR-6). -->
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+
+  <Principals>
+    <Principal id="Author">
+      <!-- Run as the interactively logged-in user (keeps running when screen is locked). -->
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+
+  <Settings>
+    <!-- Only one instance allowed; extra triggers are ignored. -->
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <!-- Battery state must not stop the service. -->
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <!-- Run indefinitely — no time limit. -->
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <!-- Start immediately if the trigger was missed (e.g. machine was off). -->
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <!-- Auto-restart on crash: up to 3 attempts, 1 minute between each. -->
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "__REPO_ROOT__\service\run-backend.ps1"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
