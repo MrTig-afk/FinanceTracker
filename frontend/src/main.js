@@ -6,12 +6,31 @@
 
 import { fetchSummary, fetchStatus } from './api.js';
 import { createDashboard } from './dashboard.js';
+import { createQueue } from './queue.js';
+import { createUploadController } from './uploadController.js';
+import { postUpload } from './upload.js';
+
+// ---------------------------------------------------------------------------
+// Service worker registration (FR-3 — installable PWA)
+// Guarded so it never runs outside a browser / secure context.
+// public/sw.js is served at /sw.js by Vite (public/ root) without bundling.
+// ---------------------------------------------------------------------------
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      // SW registration failures are non-fatal (e.g. non-HTTPS dev, privacy mode).
+    });
+  });
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   const dash = createDashboard(document);
   const statusDot = document.getElementById('status-dot');
   const refreshBtn = document.getElementById('refresh');
 
+  // -------------------------------------------------------------------------
+  // Dashboard load — reused as the post-upload refresh callback (onUploaded).
+  // -------------------------------------------------------------------------
   async function load() {
     try {
       const summary = await fetchSummary();
@@ -43,11 +62,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       })
       .catch(() => {
-        // fetchStatus already returns null on failure; this is belt-and-suspenders.
+        // fetchStatus already returns null on failure; belt-and-suspenders.
       });
   }
 
-  // Manual refresh (FR-34 v1: no push — manual refresh button satisfies the spec).
+  // -------------------------------------------------------------------------
+  // Upload queue (FR-4) — IndexedDB-backed with memory fallback.
+  // -------------------------------------------------------------------------
+  const queue = createQueue(); // default: createIdbStore() with memory fallback
+  createUploadController({ root: document, queue, onUploaded: load });
+  queue.start();
+
+  // Drain anything queued from a previous offline session.
+  queue.flush({ postFn: (form) => postUpload(form) }).catch(() => {});
+
+  // -------------------------------------------------------------------------
+  // Manual refresh (FR-34 v1: no push — manual refresh button satisfies spec).
+  // -------------------------------------------------------------------------
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => load());
   }

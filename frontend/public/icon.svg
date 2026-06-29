@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Maskable safe zone occupies the inner 80% (approx 204–308px on each axis). -->
+  <!-- Solid accent background, rounded corners. -->
+  <rect width="512" height="512" rx="96" fill="#3f51b5"/>
+  <!-- Three white bar-chart columns — finance theme, no text. -->
+  <rect x="144" y="288" width="64" height="112" rx="8" fill="#ffffff"/>
+  <rect x="224" y="208" width="64" height="192" rx="8" fill="#ffffff"/>
+  <rect x="304" y="160" width="64" height="240" rx="8" fill="#ffffff"/>
+</svg>

@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FinanceTracker</title>
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#3f51b5" />
+    <link rel="icon" href="/icon.svg" />
   </head>
   <body>
     <div id="app">
@@ -18,6 +21,49 @@
         <h2 id="month-label" class="month-label"></h2>
         <div id="net-value" class="net-value"></div>
       </div>
+
+      <!-- Upload section (FR-1 / FR-4) — must appear above the dashboard. -->
+      <section class="upload">
+        <div class="upload-zones">
+          <div class="upload-zone-wrapper">
+            <span class="upload-zone-label">CommBank CSV</span>
+            <div
+              id="dropzone-commbank"
+              class="dropzone"
+              tabindex="0"
+              role="button"
+              aria-label="Drop CommBank CSV here or click to browse"
+            >
+              <span class="dropzone-hint">Drop CSV here or click to browse</span>
+              <span id="filename-commbank" class="filename"></span>
+            </div>
+            <input id="file-commbank" type="file" accept=".csv" hidden />
+          </div>
+
+          <div class="upload-zone-wrapper">
+            <span class="upload-zone-label">Westpac CSV</span>
+            <div
+              id="dropzone-westpac"
+              class="dropzone"
+              tabindex="0"
+              role="button"
+              aria-label="Drop Westpac CSV here or click to browse"
+            >
+              <span class="dropzone-hint">Drop CSV here or click to browse</span>
+              <span id="filename-westpac" class="filename"></span>
+            </div>
+            <input id="file-westpac" type="file" accept=".csv" hidden />
+          </div>
+        </div>
+
+        <button id="upload-submit" type="button" class="upload-btn">Upload</button>
+        <p
+          id="upload-status"
+          class="upload-status"
+          role="status"
+          aria-live="polite"
+        ></p>
+      </section>
 
       <div id="message" class="message-banner" hidden></div>
 

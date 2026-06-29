@@ -1,0 +1,18 @@
+{
+  "name": "FinanceTracker",
+  "short_name": "FinanceTracker",
+  "description": "Private personal finance dashboard.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f5f7",
+  "theme_color": "#3f51b5",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
