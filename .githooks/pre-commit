@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+staged="$(git diff --cached --name-only || true)"
+[ -z "$staged" ] && exit 0
+blocked='(\.csv$|\.xlsx?$|\.ofx$|\.qif$|\.sqlite3?$|\.db$|(^|/)\.env$|(^|/)\.env\.local$|service-account.*\.json$|credentials.*\.json$|secret.*\.json$|(^|/)(data|inbox|input|output|logs)/)'
+violations="$(printf '%s\n' "$staged" | grep -iE "$blocked" || true)"
+if [ -n "$violations" ]; then
+  echo "" >&2
+  echo "COMMIT BLOCKED - sensitive files staged:" >&2
+  printf '   %s\n' $violations >&2
+  echo "Unstage them: git restore --staged <file>" >&2
+  exit 1
+fi
+keyhits="$(git diff --cached -U0 | grep -E '^\+' | grep -iE 'sk-or-[a-z0-9_-]{20,}' || true)"
+if [ -n "$keyhits" ]; then
+  echo "" >&2
+  echo "COMMIT BLOCKED - hardcoded API key in staged changes." >&2
+  exit 1
+fi
+exit 0

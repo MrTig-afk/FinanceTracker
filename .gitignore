@@ -1,0 +1,49 @@
+# ── Secrets ──────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+**/service-account*.json
+**/*credentials*.json
+**/*secret*.json
+
+# ── Bank data: NEVER COMMIT (raw inputs, processed, outputs) ──
+data/
+inbox/
+input/
+output/
+*.csv
+*.xlsx
+*.xls
+*.ofx
+*.qif
+
+# ── Local database / archive (contains transaction data) ──
+*.sqlite
+*.sqlite3
+*.db
+
+# ── Logs (may contain transaction payloads) ──
+logs/
+*.log
+
+# ── Claude config (not tracked, per project preference) ──
+CLAUDE.md
+.claude/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# ── Node / frontend ──
+node_modules/
+dist/
+.vite/
+
+# ── Agent pipeline handoff (ephemeral) ──
+.pipeline/
+
+# ── Local scratch files allowed to hold hardcoded keys (never committed) ──
+*.local.py

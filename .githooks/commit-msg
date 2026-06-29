@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# FinanceTracker: reject commit messages that mention Claude/Anthropic/AI or carry attribution trailers.
+set -euo pipefail
+msg_file="$1"
+if grep -iE '(claude|anthropic|co-authored-by:.*(claude|anthropic)|generated with)' "$msg_file" >/dev/null 2>&1; then
+  echo "" >&2
+  echo "✖ COMMIT BLOCKED — message must not mention Claude/Anthropic/AI or include attribution trailers." >&2
+  echo "Edit the message and try again." >&2
+  exit 1
+fi
+exit 0
