@@ -1,0 +1,11 @@
+[project]
+name = "financetracker"
+version = "1.0.0"
+description = "Private, self-hosted personal finance tracker (v1)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["backend"]
+python_files = ["test_*.py"]
+addopts = "-q"
