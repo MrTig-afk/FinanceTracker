@@ -1,0 +1,203 @@
+/* FinanceTracker — dashboard styles.
+   No external font or CDN fetches (privacy + offline-friendly). */
+
+/* ── Reset ───────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* Ensure [hidden] is always hidden even if another rule sets display. */
+[hidden] {
+  display: none !important;
+}
+
+/* ── Base ────────────────────────────────────────────────── */
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+  background: #f4f5f7;
+  color: #1a1a2e;
+  min-height: 100vh;
+}
+
+/* ── App shell ───────────────────────────────────────────── */
+#app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+/* ── Site header ─────────────────────────────────────────── */
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-bottom: 1.25rem;
+}
+
+.site-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #1a1a2e;
+  flex: 1;
+}
+
+/* ── Status dot ──────────────────────────────────────────── */
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9e9e9e;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+/* ── Refresh button ──────────────────────────────────────── */
+.refresh-btn {
+  padding: 0.375rem 0.875rem;
+  border: 1px solid #bdbdbd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1a1a2e;
+  font-size: 0.875rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.refresh-btn:hover,
+.refresh-btn:focus-visible {
+  background: #e8eaf6;
+  outline: 2px solid #3f51b5;
+  outline-offset: 2px;
+}
+
+/* ── Summary bar (month + net) ───────────────────────────── */
+.summary-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.month-label {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #424242;
+}
+
+/* Net figure — big and clear */
+.net-value {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #1a1a2e;
+}
+
+.net-value.net-negative {
+  color: #c62828;
+}
+
+.net-value.net-positive {
+  color: #2e7d32;
+}
+
+/* ── Message banner (empty-state / error) ────────────────── */
+.message-banner {
+  padding: 0.875rem 1rem;
+  border-radius: 6px;
+  background: #fff9c4;
+  border: 1px solid #f9a825;
+  color: #5f4c00;
+  font-size: 0.9375rem;
+  text-align: center;
+  margin-bottom: 1.25rem;
+}
+
+/* ── Dashboard: chart + totals ───────────────────────────── */
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Chart */
+.chart-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.chart-container canvas {
+  max-width: 360px;
+  width: 100%;
+}
+
+/* Totals table */
+.totals-container {
+  min-width: 0;
+}
+
+.totals-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #ffffff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.totals-table th,
+.totals-table td {
+  padding: 0.625rem 1rem;
+  text-align: left;
+  font-size: 0.9375rem;
+}
+
+.totals-table thead th {
+  background: #f5f5f5;
+  font-weight: 600;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #757575;
+}
+
+.totals-table tbody tr:not(:last-child) td {
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.totals-table tbody tr:hover {
+  background: #fafafa;
+}
+
+.amount-col {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Desktop layout: chart left, totals right ────────────── */
+@media (min-width: 720px) {
+  .dashboard {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .chart-container {
+    flex: 0 0 360px;
+  }
+
+  .totals-container {
+    flex: 1;
+  }
+}
