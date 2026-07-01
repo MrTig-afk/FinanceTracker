@@ -6,7 +6,7 @@ Westpac export format (header present):
     Column 2: Narrative      (raw description)
     Column 3: Debit Amount   (positive string when populated, blank otherwise)
     Column 4: Credit Amount  (positive string when populated, blank otherwise)
-    Column 5: Balance        (ignored — sensitive, out of FR-10 scope)
+    Column 5: Balance        (captured into Transaction.balance — LOCAL-ONLY, never sent off-machine)
     Column 6: Categories     (ignored)
     Column 7: Serial         (ignored; trailing columns may be absent)
 
@@ -21,7 +21,7 @@ Per-row tolerance: a row whose date or amount fails to parse is silently skipped
 from __future__ import annotations
 
 from .base import BankParser
-from .common import iter_csv_rows, parse_amount, parse_date
+from .common import iter_csv_rows, parse_amount, parse_date, parse_optional_amount
 from .models import Bank, Transaction
 
 
@@ -49,8 +49,9 @@ class WestpacParser(BankParser):
             description = row[2].strip()
             debit_raw = row[3]
             credit_raw = row[4]
-            # Columns 5 (Balance), 6 (Categories), 7 (Serial) are intentionally
-            # ignored — they are outside the FR-10 shape and sensitive-adjacent.
+            # Column 5 (Balance) is captured LOCAL-ONLY below; never sent off-machine
+            # (see models.py docstring). Columns 6 (Categories), 7 (Serial) stay ignored.
+            balance = parse_optional_amount(row[5]) if len(row) > 5 else None
 
             debit_present = debit_raw.strip() != ""
             credit_present = credit_raw.strip() != ""
@@ -76,6 +77,7 @@ class WestpacParser(BankParser):
                     description=description,
                     amount=amount,
                     bank=Bank.WESTPAC,
+                    balance=balance,
                 )
             )
         return transactions

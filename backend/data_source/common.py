@@ -73,6 +73,21 @@ def parse_amount(raw: str) -> Decimal:
         raise ValueError(f"Cannot parse amount: {raw!r}")
 
 
+def parse_optional_amount(raw: str) -> Decimal | None:
+    """Parse a balance cell to Decimal, or None if blank/whitespace/unparseable.
+
+    Never raises: a missing or malformed balance must not drop the transaction.
+    Reuses parse_amount's $/comma/quote handling.
+    """
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    try:
+        return parse_amount(raw)
+    except ValueError:
+        return None
+
+
 def iter_csv_rows(text: str, *, has_header: bool) -> Iterator[list[str]]:
     """Yield non-blank rows from CSV text, optionally skipping the header.
 

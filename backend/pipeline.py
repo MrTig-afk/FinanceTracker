@@ -1,7 +1,11 @@
 """pipeline.py — end-to-end orchestration for FinanceTracker (§7.2, FR-5..FR-7).
 
 Composes the already-built stages in the exact order defined by the spec:
-  Layer 1  — per-file fingerprint dedupe (skip unchanged files)
+  Layer 1  — per-file fingerprint tracking. Every uploaded file is decoded and
+             parsed (so balance reconciliation always sees its rows); an
+             already-processed file is counted as "skipped" and is NOT
+             re-fingerprinted, but its parsed rows still flow into balance
+             reconciliation and Layer 2's dedupe.
   Layer 2  — per-transaction fingerprint dedupe (skip rows already in the store)
   Layer 3  — categorise only-new rows via the sanitiser + analyser
   Output   — one monthly Excel workbook per distinct month; optional Drive upload
@@ -79,9 +83,10 @@ class RunReport:
     model_used: str           # AnalysisResult.model_used ("" when no LLM call)
     excel_path: str | None    # str(Path) of the last written workbook, or None
     drive_file_id: str | None # Drive file id, or None (unconfigured / no new data)
-    noop: bool                # True when nothing new — no LLM, no Excel, no Drive (FR-15)
+    noop: bool                # True when nothing new AND no balance changed (FR-15, Q3)
     year_month: str | None    # "YYYY-MM" of the last month produced, or None on no-op
     errors: list[str]         # safe human-readable messages; never raw txn/account text
+    balance_updates: int      # rows whose balance was corrected in place this run (Q3)
 
 
 # ---------------------------------------------------------------------------
@@ -127,18 +132,24 @@ def run_pipeline(
     """
     errors: list[str] = []
     skipped = 0
-    all_new_txns: list[Transaction] = []
+    all_parsed_txns: list[Transaction] = []
 
     # ------------------------------------------------------------------
-    # Layer 1 — per-file fingerprint dedupe (FR-12)
+    # Layer 1 — per-file fingerprint tracking (FR-12)
     # ------------------------------------------------------------------
     for uf in uploads:
         fp = file_fingerprint(uf.content)
 
-        if store.is_file_processed(fp):
+        # An already-processed file is still decoded and parsed below — its rows
+        # feed reconcile_balances() so a re-uploaded (byte-identical or
+        # balance-corrected) file can backfill/correct stored balances. It is
+        # NOT re-fingerprinted (see the `if not already_processed` guard below),
+        # and Layer 2's transaction-fingerprint dedupe guarantees its rows are
+        # never re-inserted or re-sent to the analyser.
+        already_processed = store.is_file_processed(fp)
+        if already_processed:
             skipped += 1
-            logger.debug("file skipped (already processed): %s", uf.filename)
-            continue
+            logger.debug("file already processed (re-parsed for balance reconciliation): %s", uf.filename)
 
         # Decode: prefer UTF-8 with BOM stripping; fall back to replace-mode on error.
         try:
@@ -162,21 +173,41 @@ def run_pipeline(
             errors.append(f"failed to parse {uf.filename} ({detected.value})")
             continue
 
-        all_new_txns.extend(txns)
-        # Mark processed AFTER a successful parse (even if 0 valid rows).
-        store.mark_file_processed(fp)
+        all_parsed_txns.extend(txns)
+        # Mark processed AFTER a successful parse, and only for genuinely-new
+        # files — an already-processed file keeps its original fingerprint
+        # record (re-marking it would be a harmless no-op anyway, but this
+        # keeps the intent explicit).
+        if not already_processed:
+            store.mark_file_processed(fp)
         logger.debug(
             "file parsed: %s — detected %s — %d rows",
             uf.filename, detected.value, len(txns),
         )
 
+    # Q3: correct balances on rows ALREADY in the store — this now covers BOTH a
+    # byte-different re-upload carrying a corrected balance AND a byte-identical
+    # re-upload of a file whose rows were first stored under an older,
+    # balance-less schema (all_parsed_txns includes already-processed files'
+    # rows too — see Layer 1 above). Local-only SQLite work, zero network, and
+    # it never touches category — see Store.reconcile_balances.
+    balance_updates = store.reconcile_balances(all_parsed_txns)
+
     # ------------------------------------------------------------------
     # Layer 2 — transaction-level dedupe (FR-13 / FR-15)
     # ------------------------------------------------------------------
-    result = filter_new_transactions(all_new_txns, store.seen_transaction_fingerprints())
+    result = filter_new_transactions(all_parsed_txns, store.seen_transaction_fingerprints())
 
-    if is_noop(result):
-        # Nothing new — no sanitise, no LLM, no store write, no Excel, no Drive (FR-15).
+    if is_noop(result) and balance_updates == 0:
+        # Nothing new AND no balance changed — no sanitise, no LLM, no store write,
+        # no Excel, no Drive (FR-15). A truly-identical re-run (same bytes, and
+        # every parsed balance already matches what's stored) reaches here too:
+        # Layer 1 parses the file again, but reconcile_balances finds nothing to
+        # change (balance_updates stays 0) and Layer 2 finds no new fingerprints.
+        # A re-upload whose balances differ from what's stored (e.g. the file was
+        # first ingested before this feature existed, so stored balances are
+        # NULL) does NOT reach here — balance_updates > 0 takes the fall-through
+        # path below, which persists the correction with zero analyser calls.
         logger.info(
             "pipeline no-op: files_seen=%d files_skipped=%d",
             len(uploads),
@@ -193,9 +224,10 @@ def run_pipeline(
             noop=True,
             year_month=None,
             errors=errors,
+            balance_updates=0,
         )
 
-    # Persist the new rows (INSERT OR IGNORE — double-run safe).
+    # Persist the new rows (upsert — balance-only on conflict; double-run safe).
     store.add_new(result)
 
     # ------------------------------------------------------------------
@@ -275,4 +307,5 @@ def run_pipeline(
         noop=False,
         year_month=year_month,
         errors=errors,
+        balance_updates=balance_updates,
     )

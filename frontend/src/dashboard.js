@@ -13,6 +13,7 @@ import {
   formatCurrency,
   monthLabel,
   spendTotal,
+  accountBalances,
 } from './summary.js';
 
 const COUNT_UP_DURATION_MS = 1100;
@@ -44,6 +45,7 @@ export function createDashboard(root = document) {
   const fuelToggleEl = root.getElementById('fuel-rule-toggle');
   const fuelNoteEl = root.getElementById('fuel-note');
   const messageEl = root.getElementById('message');
+  const balancesEl = root.getElementById('balances');
 
   /** @type {Chart|null} */
   let chartInstance = null;
@@ -255,6 +257,43 @@ export function createDashboard(root = document) {
     fuelNoteEl.classList.toggle('fuel-note--off', !applied);
   }
 
+  // -------------------------------------------------------------------------
+  // Account balances (local-only; never sent off-machine)
+  // -------------------------------------------------------------------------
+
+  function _renderBalances(summary) {
+    if (!balancesEl) return;
+    balancesEl.textContent = '';
+
+    const rows = accountBalances(summary);
+    if (rows.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'balances-empty';
+      empty.textContent = 'No account balances yet.';
+      balancesEl.appendChild(empty);
+      return;
+    }
+
+    rows.forEach(({ label, opening, closing }) => {
+      const rowEl = document.createElement('div');
+      rowEl.className = 'balance-row';
+
+      const bankEl = document.createElement('span');
+      bankEl.className = 'balance-row-bank';
+      bankEl.textContent = label;
+
+      const figuresEl = document.createElement('span');
+      figuresEl.className = 'balance-row-figures';
+      const openingText = opening === null ? '—' : formatCurrency(opening);
+      const closingText = closing === null ? '—' : formatCurrency(closing);
+      figuresEl.textContent = `${openingText} → ${closingText}`;
+
+      rowEl.appendChild(bankEl);
+      rowEl.appendChild(figuresEl);
+      balancesEl.appendChild(rowEl);
+    });
+  }
+
   function _pulseAffectedRows() {
     _cancelPulse();
 
@@ -373,6 +412,9 @@ export function createDashboard(root = document) {
     // Fuel card
     _renderFuelNote(summary);
 
+    // Per-account balances (local-only)
+    _renderBalances(summary);
+
     if (pulse) {
       _pulseAffectedRows();
     }
@@ -405,6 +447,7 @@ export function createDashboard(root = document) {
       fuelNoteEl.classList.remove('fuel-note--on');
       fuelNoteEl.classList.add('fuel-note--off');
     }
+    if (balancesEl) balancesEl.textContent = '';
   }
 
   /**

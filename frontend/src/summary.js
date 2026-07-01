@@ -159,6 +159,46 @@ export function computeNet(summary) {
   return parseAmount(summary.net);
 }
 
+/** Display labels for known bank keys; unknown keys are capitalised defensively. */
+const _BANK_LABELS = {
+  commbank: 'CommBank',
+  westpac: 'Westpac',
+};
+
+/** Stable display order: CommBank, Westpac, then any other keys as they appear. */
+const _BANK_ORDER = ['commbank', 'westpac'];
+
+/**
+ * Extract per-account opening/closing balances for display.
+ *
+ * Balance is LOCAL-ONLY data (never sent off-machine); this is a pure transform
+ * of the summary object already returned by the local /summary endpoint.
+ *
+ * @param {{ account_balances?: Record<string, { opening: string|null, closing: string|null }> }} summary
+ * @returns {Array<{ bank: string, label: string, opening: number|null, closing: number|null }>}
+ */
+export function accountBalances(summary) {
+  const balances = summary.account_balances ?? {};
+  const keys = Object.keys(balances);
+
+  const ordered = [
+    ..._BANK_ORDER.filter((k) => keys.includes(k)),
+    ...keys.filter((k) => !_BANK_ORDER.includes(k)),
+  ];
+
+  return ordered.map((bank) => {
+    const { opening = null, closing = null } = balances[bank] ?? {};
+    const label =
+      _BANK_LABELS[bank] ?? (bank.charAt(0).toUpperCase() + bank.slice(1));
+    return {
+      bank,
+      label,
+      opening: typeof opening === 'string' ? parseAmount(opening) : null,
+      closing: typeof closing === 'string' ? parseAmount(closing) : null,
+    };
+  });
+}
+
 /**
  * Convert a 'YYYY-MM' string to a human-readable month label.
  * Example: '2026-06' → 'June 2026'.

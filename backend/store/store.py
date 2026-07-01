@@ -25,7 +25,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from backend.idempotency import NewTxnResult
+from backend.data_source import Bank, Transaction
+from backend.idempotency import NewTxnResult, transaction_fingerprint
 
 from .category_context import CategoryContext, DEFAULT_CONTEXT
 from .fuel_rule import is_fuel_convenience
@@ -57,6 +58,78 @@ def amount_to_text(amount: Decimal) -> str:
 def amount_from_text(text: str) -> Decimal:
     """Parse a stored TEXT amount back to an exact Decimal. Never use float."""
     return Decimal(text)
+
+
+# ---------------------------------------------------------------------------
+# Order-agnostic opening/closing balance derivation (Q2)
+# ---------------------------------------------------------------------------
+
+# Cent tolerance for bank rounding in the running-balance relation.
+_BALANCE_TOLERANCE = Decimal("0.01")
+
+
+def _chain_result(
+    seq: list[tuple[Decimal, Decimal | None]],
+) -> tuple[Decimal, Decimal] | None:
+    """Validate one candidate chronological sequence; return (opening, closing) or None.
+
+    `seq` is a list of (amount, balance) pairs in a candidate chronological order.
+    Valid iff every balance is non-null AND, for each consecutive pair,
+    abs(balance[i] - (balance[i-1] + amount[i])) <= _BALANCE_TOLERANCE.
+    """
+    for _, balance in seq:
+        if balance is None:
+            return None
+    for i in range(1, len(seq)):
+        prev_balance = seq[i - 1][1]
+        amount_i, balance_i = seq[i]
+        if abs(balance_i - (prev_balance + amount_i)) > _BALANCE_TOLERANCE:  # type: ignore[operator]
+            return None
+    first_amount, first_balance = seq[0]
+    opening = first_balance - first_amount  # type: ignore[operator]
+    closing = seq[-1][1]
+    return (opening, closing)
+
+
+def _derive_account_balance(rows: list[sqlite3.Row]) -> dict[str, str | None]:
+    """Order-agnostic opening/closing derivation for one account's month rows (Q2).
+
+    `rows` are in insertion order (id ascending == CSV order); each row has
+    'amount' and 'balance' TEXT columns ('balance' may be NULL). Chronological
+    direction is NOT assumed from row order — both the ascending sequence and
+    its reverse are checked against the running-balance relation, and whichever
+    direction is internally consistent (or both, if they agree) is used.
+
+    Returns {"opening": str|None, "closing": str|None}; both None when the
+    direction cannot be determined (missing balance, inconsistent chain, or the
+    two directions disagree) — the graceful "unavailable" fallback.
+    """
+    parsed = [
+        (
+            amount_from_text(r["amount"]),
+            amount_from_text(r["balance"]) if r["balance"] is not None else None,
+        )
+        for r in rows
+    ]
+
+    if len(parsed) == 1:
+        amount, balance = parsed[0]
+        if balance is None:
+            return {"opening": None, "closing": None}
+        return {"opening": str(balance - amount), "closing": str(balance)}
+
+    asc_result = _chain_result(parsed)
+    desc_result = _chain_result(list(reversed(parsed)))
+
+    if asc_result is not None and desc_result is not None:
+        result = asc_result if asc_result == desc_result else None
+    else:
+        result = asc_result if asc_result is not None else desc_result
+
+    if result is None:
+        return {"opening": None, "closing": None}
+    opening, closing = result
+    return {"opening": str(opening), "closing": str(closing)}
 
 
 # ---------------------------------------------------------------------------
@@ -302,8 +375,11 @@ class Store:
     def add_new(self, result: NewTxnResult) -> int:
         """Persist genuinely-new rows from a NewTxnResult.
 
-        Uses INSERT OR IGNORE on the UNIQUE txn_fingerprint column so a double-run
-        never duplicates rows (FR-15, FR-13). category is always NULL on initial insert.
+        Inserts on the UNIQUE txn_fingerprint column; on conflict, upserts the
+        balance column ONLY (never category) — see the Q3 upsert note in the spec.
+        A double-run with identical (or missing) balances writes nothing (the
+        WHERE clause evaluates false), preserving FR-15/FR-13 no-op behaviour.
+        category is always NULL on initial insert.
 
         All rows are written in a single transaction; commits once before returning.
 
@@ -315,8 +391,8 @@ class Store:
         Returns
         -------
         int
-            Number of rows actually inserted. 0 on a double-run (all fingerprints
-            already present). 0 for an empty NewTxnResult.
+            Number of rows actually inserted or balance-updated. 0 on a double-run
+            with unchanged/null balances. 0 for an empty NewTxnResult.
         """
         if not result.new_transactions:
             return 0
@@ -333,22 +409,71 @@ class Store:
                 None,                               # category — NULL until categorised
                 txn.date.isoformat()[:7],           # year_month 'YYYY-MM'
                 _utc_now_iso(),                     # created_at UTC
+                amount_to_text(txn.balance) if txn.balance is not None else None,
             )
             for i, txn in enumerate(result.new_transactions)
         ]
 
         self.conn.executemany(
             """
-            INSERT OR IGNORE INTO transactions
+            INSERT INTO transactions
                 (txn_fingerprint, date, description, amount, bank,
-                 category, year_month, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 category, year_month, created_at, balance)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(txn_fingerprint) DO UPDATE SET
+                balance = excluded.balance
+            WHERE excluded.balance IS NOT NULL
+              AND (transactions.balance IS NULL OR transactions.balance IS NOT excluded.balance)
             """,
             rows,
         )
         self.conn.commit()
 
         return self.conn.total_changes - before
+
+    def reconcile_balances(self, transactions: list[Transaction]) -> int:
+        """Update balance-only for rows ALREADY in the store whose balance changed.
+
+        The primary path for correcting a bank's running balance on a byte-different
+        re-upload (Q3). For each txn: skip if txn.balance is None (a missing new
+        balance must not wipe a stored one). Compute transaction_fingerprint(txn);
+        if no stored row has that fingerprint, skip (that is a new row — add_new
+        inserts it). If the stored balance already equals amount_to_text(txn.balance),
+        skip (no write ⇒ idempotent). Otherwise UPDATE that row's balance column only
+        — never category, never a new row, never a network call.
+
+        All updates run in a single transaction; commits once before returning.
+
+        Returns
+        -------
+        int
+            Count of rows whose stored balance was actually changed.
+        """
+        if not transactions:
+            return 0
+
+        updated = 0
+        for txn in transactions:
+            if txn.balance is None:
+                continue
+            fp = transaction_fingerprint(txn)
+            row = self.conn.execute(
+                "SELECT balance FROM transactions WHERE txn_fingerprint = ?",
+                (fp,),
+            ).fetchone()
+            if row is None:
+                continue  # new row — add_new's job, not ours
+            new_balance = amount_to_text(txn.balance)
+            if row["balance"] == new_balance:
+                continue  # unchanged — no write
+            self.conn.execute(
+                "UPDATE transactions SET balance = ? WHERE txn_fingerprint = ?",
+                (new_balance, fp),
+            )
+            updated += 1
+
+        self.conn.commit()
+        return updated
 
     # ------------------------------------------------------------------
     # Layer 3: categorise only-new (FR-14)
@@ -559,6 +684,42 @@ class Store:
             return None
         return row[0]  # None when no rows exist
 
+    def account_balances(self, year_month: str | None = None) -> dict:
+        """Per-account opening/closing balance for a month (LOCAL-ONLY, never sent off-machine).
+
+        Returns { "commbank": {"opening": str|None, "closing": str|None},
+                  "westpac":  {"opening": str|None, "closing": str|None} }
+        Only includes a bank key when that bank has >=1 row in the month.
+        'null' opening/closing means "could not be determined" — the caller
+        renders this as an unavailable figure, never a guessed number.
+        All money values are str(Decimal) or None — never float.
+
+        Defaults to latest_year_month(); empty DB / no month -> {}.
+
+        Order-agnostic derivation (Q2): row insertion order (id ascending) is CSV
+        order, but CSV order is NOT assumed to be chronological. Instead, both the
+        ascending and reversed sequences are checked against the running-balance
+        relation `abs(balance[i] - (balance[i-1] + amount[i])) <= 0.01`; whichever
+        direction holds (and only that one, or both agreeing) is used to derive
+        opening/closing. Otherwise the account is reported unavailable.
+        """
+        if year_month is None:
+            year_month = self.latest_year_month()
+        if year_month is None:
+            return {}
+
+        result: dict[str, dict[str, str | None]] = {}
+        for bank in (Bank.COMMBANK.value, Bank.WESTPAC.value):
+            rows = self.conn.execute(
+                "SELECT amount, balance FROM transactions "
+                "WHERE year_month = ? AND bank = ? ORDER BY id",
+                (year_month, bank),
+            ).fetchall()
+            if not rows:
+                continue
+            result[bank] = _derive_account_balance(rows)
+        return result
+
     def summary(self, year_month: str | None = None) -> dict:
         """Return a categorised spending summary for a given month.
 
@@ -581,6 +742,7 @@ class Store:
                 "fuel_rule_applied": false,  # small-fuel-stop rule active this month?
                 "fuel_rule_eligible": 3,  # count of rows subject to the fuel-stop rule
                 "fuel_rule_eligible_amount": "-24.10",  # signed Decimal sum, as str
+                "account_balances": {"commbank": {"opening": "1000.00", "closing": "918.10"}},
             }
         """
         if year_month is None:
@@ -596,6 +758,7 @@ class Store:
                 "fuel_rule_applied": False,
                 "fuel_rule_eligible": 0,
                 "fuel_rule_eligible_amount": "0.00",
+                "account_balances": {},
             }
 
         rows = self.conn.execute(
@@ -622,6 +785,7 @@ class Store:
             "fuel_rule_applied": self.fuel_rule_applied(year_month),
             "fuel_rule_eligible": count,
             "fuel_rule_eligible_amount": str(amt),
+            "account_balances": self.account_balances(year_month),
         }
 
     def transactions_for_month(self, year_month: str | None = None) -> list[MonthRow]:

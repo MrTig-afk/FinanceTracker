@@ -43,9 +43,16 @@ def _txn(
     amount: str = "-10.00",
     d: date = _SYNTH_DATE,
     bank: Bank = Bank.COMMBANK,
+    balance: str | None = None,
 ) -> Transaction:
     """Build a synthetic Transaction without touching any real data."""
-    return Transaction(date=d, description=desc, amount=Decimal(amount), bank=bank)
+    return Transaction(
+        date=d,
+        description=desc,
+        amount=Decimal(amount),
+        bank=bank,
+        balance=Decimal(balance) if balance is not None else None,
+    )
 
 
 def _result(*txns: Transaction) -> NewTxnResult:
@@ -431,6 +438,7 @@ class TestSummaryCorrectness:
             "fuel_rule_applied": False,
             "fuel_rule_eligible": 0,
             "fuel_rule_eligible_amount": "0.00",
+            "account_balances": {},
         }
 
     def test_summary_mixed_income_and_expense(self) -> None:
@@ -763,3 +771,379 @@ class TestTaxonomy:
         assert coerce_category("groceries") == "Other"
         assert coerce_category("GROCERIES") == "Other"
         assert coerce_category("dining out") == "Other"
+
+
+# ---------------------------------------------------------------------------
+# T3 — Store roundtrip (balance)
+# ---------------------------------------------------------------------------
+
+
+class TestBalanceRoundtrip:
+    """T3: add_new persists balance; a None balance is stored as NULL."""
+
+    def test_balance_persisted_and_read_back(self) -> None:
+        t = _txn("SYNTH RETAILER", amount="-45.99", d=date(2026, 6, 15), balance="954.01")
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            row = store.conn.execute(
+                "SELECT balance FROM transactions WHERE txn_fingerprint = ?",
+                (r.fingerprints[0],),
+            ).fetchone()
+        assert row["balance"] == "954.01"
+
+    def test_none_balance_stored_as_null(self) -> None:
+        t = _txn("SYNTH RETAILER TWO", amount="-10.00", d=date(2026, 6, 16))
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            row = store.conn.execute(
+                "SELECT balance FROM transactions WHERE txn_fingerprint = ?",
+                (r.fingerprints[0],),
+            ).fetchone()
+        assert row["balance"] is None
+
+
+# ---------------------------------------------------------------------------
+# T4a/T4b — Idempotency unchanged by balance
+# ---------------------------------------------------------------------------
+
+
+class TestBalanceIdempotency:
+    def test_identical_balance_rerun_writes_nothing(self) -> None:
+        """T4a: add_new twice with identical fingerprint AND identical balance -> 0 writes."""
+        t = _txn("SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1), balance="480.00")
+        r = _result(t)
+        with Store(":memory:") as store:
+            first = store.add_new(r)
+            second = store.add_new(r)
+            count = store.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        assert first == 1
+        assert second == 0, "identical-balance re-run must write nothing (upsert WHERE is false)"
+        assert count == 1
+
+    def test_fingerprint_excludes_balance(self) -> None:
+        """T4b: two Transactions identical except balance produce the SAME fingerprint."""
+        t1 = _txn("SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1), balance="480.00")
+        t2 = _txn("SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1), balance="999.99")
+        assert transaction_fingerprint(t1) == transaction_fingerprint(t2)
+
+
+# ---------------------------------------------------------------------------
+# add_new's OWN upsert conflict branch (not via reconcile_balances) — the
+# "ON CONFLICT ... DO UPDATE SET balance = excluded.balance" WHERE clause
+# flagged by the tester-focus notes as the crux of correctness+idempotency.
+# ---------------------------------------------------------------------------
+
+
+class TestAddNewUpsertConflictBranch:
+    def test_differing_balance_conflict_updates_balance_no_duplicate_no_category_change(
+        self,
+    ) -> None:
+        """Calling add_new a SECOND time with the same fingerprint but a DIFFERENT,
+        non-null balance hits the upsert's ON CONFLICT branch directly: balance is
+        updated in place, no duplicate row is created, and category (set between the
+        two add_new calls) is left untouched — add_new's SET clause never touches it."""
+        t_v1 = _txn("SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1), balance="480.00")
+        r_v1 = _result(t_v1)
+
+        with Store(":memory:") as store:
+            first = store.add_new(r_v1)
+            store.set_categories({r_v1.fingerprints[0]: "Groceries"})
+
+            # Same transaction (same fingerprint), corrected balance.
+            t_v2 = _txn("SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1), balance="475.00")
+            r_v2 = _result(t_v2)
+            second = store.add_new(r_v2)
+
+            row_count = store.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+            row = store.conn.execute(
+                "SELECT balance, category FROM transactions WHERE txn_fingerprint = ?",
+                (r_v1.fingerprints[0],),
+            ).fetchone()
+
+        assert first == 1
+        assert second == 1, "a differing-balance conflict must report exactly 1 change"
+        assert row_count == 1, "no duplicate row on fingerprint conflict"
+        assert row["balance"] == "475.00"
+        assert row["category"] == "Groceries", "add_new's upsert must never touch category"
+
+    def test_stored_balance_null_new_non_null_conflict_fills_it_in(self) -> None:
+        """Stored balance NULL + a new non-null balance on conflict -> filled in (the
+        WHERE clause's `transactions.balance IS NULL` arm)."""
+        t_no_balance = _txn("SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1))  # balance=None
+        r1 = _result(t_no_balance)
+
+        with Store(":memory:") as store:
+            store.add_new(r1)
+
+            t_with_balance = _txn(
+                "SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1), balance="480.00"
+            )
+            r2 = _result(t_with_balance)
+            second = store.add_new(r2)
+
+            row = store.conn.execute(
+                "SELECT balance FROM transactions WHERE txn_fingerprint = ?",
+                (r1.fingerprints[0],),
+            ).fetchone()
+
+        assert second == 1
+        assert row["balance"] == "480.00"
+
+    def test_conflict_with_null_new_balance_never_wipes_stored_balance(self) -> None:
+        """A conflicting row whose NEW balance is None must NOT wipe an existing stored
+        balance (WHERE excluded.balance IS NOT NULL guards this)."""
+        t_with_balance = _txn(
+            "SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1), balance="480.00"
+        )
+        r1 = _result(t_with_balance)
+
+        with Store(":memory:") as store:
+            store.add_new(r1)
+
+            t_no_balance = _txn("SYNTH SHOP", amount="-20.00", d=date(2026, 6, 1))  # None
+            r2 = _result(t_no_balance)
+            second = store.add_new(r2)
+
+            row = store.conn.execute(
+                "SELECT balance FROM transactions WHERE txn_fingerprint = ?",
+                (r1.fingerprints[0],),
+            ).fetchone()
+
+        assert second == 0, "a null new balance must not count as a change"
+        assert row["balance"] == "480.00", "stored balance must survive a null-balance conflict"
+
+
+# ---------------------------------------------------------------------------
+# T5 — Order-agnostic opening/closing derivation
+# ---------------------------------------------------------------------------
+
+
+class TestAccountBalanceDerivation:
+    def test_oldest_first_insertion_derives_correct_balances(self) -> None:
+        """T5a: rows inserted oldest-first -> correct opening/closing."""
+        t1 = _txn("SYNTH SHOP A", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        t2 = _txn("SYNTH SHOP B", amount="-20.00", d=date(2026, 6, 2), balance="70.00")
+        t3 = _txn("SYNTH SHOP C", amount="5.00", d=date(2026, 6, 3), balance="75.00")
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2, t3))
+            balances = store.account_balances("2026-06")
+        assert balances["commbank"] == {"opening": "100.00", "closing": "75.00"}
+
+    def test_newest_first_insertion_identical_result(self) -> None:
+        """T5b: same chain inserted newest-first -> IDENTICAL opening/closing (order-agnostic)."""
+        t1 = _txn("SYNTH SHOP A", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        t2 = _txn("SYNTH SHOP B", amount="-20.00", d=date(2026, 6, 2), balance="70.00")
+        t3 = _txn("SYNTH SHOP C", amount="5.00", d=date(2026, 6, 3), balance="75.00")
+        with Store(":memory:") as store:
+            # Insertion (id ascending) order is t3, t2, t1 — the reverse of chronological.
+            store.add_new(_result(t3, t2, t1))
+            balances = store.account_balances("2026-06")
+        assert balances["commbank"] == {"opening": "100.00", "closing": "75.00"}
+
+    def test_single_row_month_derivable(self) -> None:
+        """T5c: single-row month derives directly (opening = balance - amount)."""
+        t = _txn("SYNTH SHOP SOLO", amount="-15.00", d=date(2026, 6, 5), balance="85.00")
+        with Store(":memory:") as store:
+            store.add_new(_result(t))
+            balances = store.account_balances("2026-06")
+        assert balances["commbank"] == {"opening": "100.00", "closing": "85.00"}
+
+    def test_undetermined_null_balance_mid_sequence(self) -> None:
+        """T5d: a null balance mid-sequence -> unavailable fallback."""
+        t1 = _txn("SYNTH SHOP A", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        t2 = _txn("SYNTH SHOP B", amount="-20.00", d=date(2026, 6, 2))  # balance missing
+        t3 = _txn("SYNTH SHOP C", amount="5.00", d=date(2026, 6, 3), balance="75.00")
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2, t3))
+            balances = store.account_balances("2026-06")
+        assert balances["commbank"] == {"opening": None, "closing": None}
+
+    def test_undetermined_inconsistent_chain(self) -> None:
+        """T5d: a chain matching neither direction -> unavailable fallback, never a wrong number."""
+        t1 = _txn("SYNTH SHOP A", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        t2 = _txn("SYNTH SHOP B", amount="-20.00", d=date(2026, 6, 2), balance="12345.00")
+        t3 = _txn("SYNTH SHOP C", amount="5.00", d=date(2026, 6, 3), balance="75.00")
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2, t3))
+            balances = store.account_balances("2026-06")
+        assert balances["commbank"] == {"opening": None, "closing": None}
+
+    def test_undetermined_both_directions_valid_but_disagree(self) -> None:
+        """Both asc and desc chains are internally self-consistent (each passes its own
+        running-balance check) but yield DIFFERENT (opening, closing) pairs -> unavailable.
+
+        This exercises the asc_result != desc_result branch of _derive_account_balance,
+        distinct from T5d's 'neither direction valid' case. Amounts are symmetric
+        (-10 / +10) so BOTH the forward and reverse chains pass the tolerance check,
+        yet imply different opening balances (110 vs 100) — genuinely ambiguous.
+        """
+        t1 = _txn("SYNTH SHOP A", amount="-10.00", d=date(2026, 6, 1), balance="100.00")
+        t2 = _txn("SYNTH SHOP B", amount="10.00", d=date(2026, 6, 2), balance="110.00")
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2))
+            balances = store.account_balances("2026-06")
+        assert balances["commbank"] == {"opening": None, "closing": None}
+
+    def test_single_row_missing_balance_unavailable(self) -> None:
+        """A single-row month with no balance is unavailable, not a guess."""
+        t = _txn("SYNTH SHOP SOLO", amount="-15.00", d=date(2026, 6, 5))
+        with Store(":memory:") as store:
+            store.add_new(_result(t))
+            balances = store.account_balances("2026-06")
+        assert balances["commbank"] == {"opening": None, "closing": None}
+
+    def test_no_rows_for_bank_omits_key(self) -> None:
+        """A bank with zero rows this month is entirely absent from the dict."""
+        t = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="90.00", bank=Bank.COMMBANK)
+        with Store(":memory:") as store:
+            store.add_new(_result(t))
+            balances = store.account_balances("2026-06")
+        assert "westpac" not in balances
+
+    def test_empty_db_returns_empty_dict(self) -> None:
+        with Store(":memory:") as store:
+            balances = store.account_balances(None)
+        assert balances == {}
+
+
+# ---------------------------------------------------------------------------
+# T6 — Two-account derivation
+# ---------------------------------------------------------------------------
+
+
+class TestTwoAccountDerivation:
+    def test_two_banks_independent_balances_no_combined_key(self) -> None:
+        """T6: two independent per-bank keys; no combined/summed figure anywhere."""
+        cb1 = _txn("SYNTH CB SHOP", amount="-10.00", d=date(2026, 6, 1), bank=Bank.COMMBANK, balance="90.00")
+        cb2 = _txn("SYNTH CB SHOP TWO", amount="-5.00", d=date(2026, 6, 2), bank=Bank.COMMBANK, balance="85.00")
+        wp1 = _txn("SYNTH WP SHOP", amount="-50.00", d=date(2026, 6, 1), bank=Bank.WESTPAC, balance="450.00")
+        wp2 = _txn("SYNTH WP SHOP TWO", amount="100.00", d=date(2026, 6, 2), bank=Bank.WESTPAC, balance="550.00")
+
+        with Store(":memory:") as store:
+            store.add_new(_result(cb1, cb2, wp1, wp2))
+            balances = store.account_balances("2026-06")
+
+        assert set(balances.keys()) == {"commbank", "westpac"}
+        assert balances["commbank"] == {"opening": "100.00", "closing": "85.00"}
+        assert balances["westpac"] == {"opening": "500.00", "closing": "550.00"}
+        assert "combined" not in balances
+        assert "total" not in balances
+
+    def test_summary_exposes_account_balances_key(self) -> None:
+        """summary() surfaces account_balances additively; existing keys unchanged."""
+        cb = _txn("SYNTH CB SHOP", amount="-10.00", d=date(2026, 6, 1), bank=Bank.COMMBANK, balance="90.00")
+        with Store(":memory:") as store:
+            store.add_new(_result(cb))
+            result = store.summary("2026-06")
+        assert result["account_balances"] == {"commbank": {"opening": "100.00", "closing": "90.00"}}
+        # Existing keys still present (additive change only).
+        assert "totals" in result and "net" in result and "count" in result
+
+
+# ---------------------------------------------------------------------------
+# T7 (store-level) — privacy: zero network code in the balance code path
+# ---------------------------------------------------------------------------
+
+
+class TestBalancePrivacyStoreLevel:
+    def test_store_module_has_no_network_imports(self) -> None:
+        """T7 (store-level): store.py — including reconcile_balances/account_balances
+        — imports zero network libraries (matches the module's own docstring claim)."""
+        import ast
+        import inspect
+
+        from backend.store import store as store_module
+
+        tree = ast.parse(inspect.getsource(store_module))
+        imported_roots: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_roots.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_roots.add(node.module.split(".")[0])
+
+        forbidden = {"requests", "httpx", "urllib", "socket", "http", "aiohttp"}
+        leaked = imported_roots & forbidden
+        assert not leaked, f"store.py must import zero network libraries (found {leaked})"
+
+    def test_reconcile_balances_never_touches_category(self) -> None:
+        """Balance-only reconciliation never mutates category, even when one is set."""
+        t = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({r.fingerprints[0]: "Groceries"})
+            corrected = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="88.00")
+            store.reconcile_balances([corrected])
+            row = store.conn.execute(
+                "SELECT category, balance FROM transactions WHERE txn_fingerprint = ?",
+                (r.fingerprints[0],),
+            ).fetchone()
+        assert row["category"] == "Groceries"
+        assert row["balance"] == "88.00"
+
+
+# ---------------------------------------------------------------------------
+# T10 — reconcile_balances unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileBalances:
+    def test_balance_correction_updates_in_place(self) -> None:
+        t = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({r.fingerprints[0]: "Groceries"})
+
+            corrected = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="88.00")
+            updated = store.reconcile_balances([corrected])
+
+            row_count = store.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+            row = store.conn.execute(
+                "SELECT balance, category FROM transactions WHERE txn_fingerprint = ?",
+                (r.fingerprints[0],),
+            ).fetchone()
+
+        assert updated == 1
+        assert row_count == 1, "no duplicate row must be created"
+        assert row["balance"] == "88.00"
+        assert row["category"] == "Groceries"
+
+    def test_second_identical_call_returns_zero(self) -> None:
+        t = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            corrected = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="88.00")
+            store.reconcile_balances([corrected])
+            second = store.reconcile_balances([corrected])
+        assert second == 0
+
+    def test_none_balance_keeps_stored_value_returns_zero(self) -> None:
+        t = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1), balance="90.00")
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            missing_balance = _txn("SYNTH SHOP", amount="-10.00", d=date(2026, 6, 1))  # balance=None
+            updated = store.reconcile_balances([missing_balance])
+            row = store.conn.execute(
+                "SELECT balance FROM transactions WHERE txn_fingerprint = ?",
+                (r.fingerprints[0],),
+            ).fetchone()
+        assert updated == 0
+        assert row["balance"] == "90.00"
+
+    def test_unknown_fingerprint_skipped(self) -> None:
+        unseen = _txn("SYNTH SHOP UNSEEN", amount="-5.00", d=date(2026, 6, 1), balance="50.00")
+        with Store(":memory:") as store:
+            updated = store.reconcile_balances([unseen])
+            count = store.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        assert updated == 0
+        assert count == 0
+
+    def test_empty_list_returns_zero(self) -> None:
+        with Store(":memory:") as store:
+            assert store.reconcile_balances([]) == 0

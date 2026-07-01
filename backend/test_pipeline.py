@@ -14,8 +14,13 @@ import json
 
 import pytest
 
-from backend.data_source import Bank
+from datetime import date as _date
+from decimal import Decimal
+
+from backend.data_source import Bank, Transaction
+from backend.idempotency import NewTxnResult, file_fingerprint, transaction_fingerprint
 from backend.pipeline import UploadedFile, run_pipeline
+from backend.sanitiser import sanitise
 from backend.store import Store
 
 
@@ -285,8 +290,14 @@ class TestFileFingerPrintSkip:
         store.close()
         assert second.files_skipped == 2
 
-    def test_single_file_skipped_not_parsed_twice(self, tmp_path):
-        """Re-upload of a single file → files_skipped == 1."""
+    def test_single_file_skipped_counter_on_reupload(self, tmp_path):
+        """Re-upload of a single already-processed file → files_skipped == 1.
+
+        Note: the file IS still parsed on the second run (so reconcile_balances
+        can see its rows) — files_skipped only means "not re-fingerprinted",
+        not "not parsed". See TestReuploadBackfillsNullBalance for the case
+        this behaviour exists to support.
+        """
         store = Store(":memory:")
         fake = FakeAnalyserClient()
         cb = UploadedFile("commbank.csv", Bank.COMMBANK, _CB_BYTES)
@@ -687,3 +698,291 @@ class TestCategoryContextPreamble:
 
         assert second.noop is True
         assert fake.call_count == calls_after_first
+
+
+# ---------------------------------------------------------------------------
+# T4c — identical-bytes re-run: noop, balance_updates=0, zero LLM calls
+# ---------------------------------------------------------------------------
+
+class TestIdempotencyBalanceUpdatesField:
+    """T4c: an identical-bytes re-run is a true no-op with RunReport.balance_updates == 0."""
+
+    def test_identical_bytes_rerun_balance_updates_zero(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        uploads = _make_uploads()
+
+        first = run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        calls_after_first = fake.call_count
+
+        second = run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert first.balance_updates == 0
+        assert second.noop is True
+        assert second.balance_updates == 0
+        assert fake.call_count == calls_after_first, "identical re-run must make zero LLM calls"
+
+
+# ---------------------------------------------------------------------------
+# T7 (pipeline-level) — PRIVACY (BLOCKING): balance never leaves the machine
+# ---------------------------------------------------------------------------
+
+class TestBalancePrivacyPipelineLevel:
+    """T7: a distinctive balance sentinel never reaches the sanitised payload, the
+    audit log, or the analyser — via both a sanitiser-unit check and a full
+    pipeline run with a call-recording fake client."""
+
+    _SENTINEL = Decimal("987654.32")
+
+    def test_sanitiser_unit_balance_sentinel_never_leaves(self, tmp_path):
+        txns = [
+            Transaction(
+                date=_date(2026, 6, 1),
+                description="SYNTH BALANCE SHOP",
+                amount=Decimal("-10.00"),
+                bank=Bank.COMMBANK,
+                balance=self._SENTINEL,
+            )
+        ]
+        result = sanitise(txns, audit=True, log_dir=tmp_path)
+
+        sentinel_str = str(self._SENTINEL)
+        for stxn in result.payload:
+            assert sentinel_str not in stxn.cleaned_description
+            assert not hasattr(stxn, "balance")
+
+        log_text = (tmp_path / "sanitiser-audit.jsonl").read_text(encoding="utf-8")
+        assert sentinel_str not in log_text
+
+    def test_pipeline_balance_sentinel_never_reaches_analyser(self, tmp_path):
+        cb_text = f"20/06/2026,-72.40,SYNTH BALANCE SHOP,{self._SENTINEL}\n"
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, cb_text.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        sentinel_str = str(self._SENTINEL)
+        all_text = " ".join(fake.received_user_prompts) + " ".join(fake.received_system_prompts)
+        assert sentinel_str not in all_text
+        assert fake.call_count >= 1, "fake analyser was never called"
+
+    def test_sanitised_payload_unaffected_by_balance_field(self, tmp_path):
+        """The off-machine payload is byte-for-byte the same whether or not a balance
+        column is present — balance cannot reach the analyser via any path."""
+        cb_with_balance = "20/06/2026,-72.40,SYNTH BALANCE SHOP,1000.00\n"
+        cb_without_balance = "20/06/2026,-72.40,SYNTH BALANCE SHOP\n"  # short row -> balance None
+
+        store_a = Store(":memory:")
+        fake_a = FakeAnalyserClient()
+        run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, cb_with_balance.encode())],
+            store=store_a,
+            analyser_client=fake_a,
+            drive_service=None,
+            output_dir=tmp_path / "a",
+            sanitise_log_dir=tmp_path / "a",
+        )
+        store_a.close()
+
+        store_b = Store(":memory:")
+        fake_b = FakeAnalyserClient()
+        run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, cb_without_balance.encode())],
+            store=store_b,
+            analyser_client=fake_b,
+            drive_service=None,
+            output_dir=tmp_path / "b",
+            sanitise_log_dir=tmp_path / "b",
+        )
+        store_b.close()
+
+        assert fake_a.received_user_prompts == fake_b.received_user_prompts
+
+
+# ---------------------------------------------------------------------------
+# T11 — Pipeline balance-corrected re-upload
+# ---------------------------------------------------------------------------
+
+class TestBalanceCorrectedReupload:
+    """T11: a byte-different re-upload carrying a corrected balance updates the
+    stored balance in place, with no duplicate row, zero analyser calls, and the
+    category left unchanged."""
+
+    _CB_TEXT_V1 = "20/06/2026,-72.40,SYNTH BALANCE SHOP,1000.00\n"
+    _CB_TEXT_V2 = "20/06/2026,-72.40,SYNTH BALANCE SHOP,995.00\n"  # same txn, balance corrected
+
+    def test_balance_corrected_reupload_updates_in_place(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+
+        first = run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT_V1.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        calls_after_first = fake.call_count
+        assert calls_after_first >= 1
+
+        second = run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT_V2.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+        rows = store.conn.execute("SELECT balance, category FROM transactions").fetchall()
+        store.close()
+
+        assert first.noop is False
+
+        # Balance updated, no duplicate row.
+        assert len(rows) == 1
+        assert rows[0]["balance"] == "995.00"
+        assert rows[0]["category"] == "Groceries"  # unchanged from the first run
+
+        # Zero analyser calls on the balance-only re-upload.
+        assert fake.call_count == calls_after_first
+
+        # RunReport contract for a balance-only re-upload.
+        assert second.noop is False
+        assert second.new_txns == 0
+        assert second.categorised == 0
+        assert second.model_used == ""
+        assert second.balance_updates == 1
+
+
+# ---------------------------------------------------------------------------
+# NEW — re-upload of an already-processed file whose stored balance is NULL
+# (the realistic bug case: rows first ingested before balance capture existed,
+# so the file is already fingerprinted but the balance column was never
+# persisted). This is the case the Layer-1 restructure exists to fix: an
+# already-processed file must still be parsed so reconcile_balances() can see
+# its rows, not skipped-before-parse.
+# ---------------------------------------------------------------------------
+
+class TestReuploadBackfillsNullBalance:
+    """A file already marked processed (fingerprinted), whose stored row has a
+    NULL balance, backfills that balance when the same content is re-run
+    through the pipeline — with no duplicate row, zero analyser calls, and the
+    category left unchanged."""
+
+    _CB_TEXT = "20/06/2026,-72.40,SYNTH BALANCE SHOP,1000.00\n"
+
+    def _seed_legacy_row(self, store: Store) -> None:
+        """Simulate a row ingested under the pre-balance-capture schema: the
+        transaction is stored with balance=NULL and a category already set,
+        and the file's exact bytes are already recorded as processed — even
+        though (unlike the old code) parsing these bytes today WOULD yield a
+        non-null balance, because at the time this row was first ingested the
+        parser did not yet capture the balance column at all.
+        """
+        legacy_txn = Transaction(
+            date=_date(2026, 6, 20),
+            description="SYNTH BALANCE SHOP",
+            amount=Decimal("-72.40"),
+            bank=Bank.COMMBANK,
+            balance=None,  # never captured under the old schema
+        )
+        fp = transaction_fingerprint(legacy_txn)
+        store.add_new(
+            NewTxnResult(
+                new_transactions=(legacy_txn,),
+                fingerprints=(fp,),
+                duplicates_in_batch=0,
+            )
+        )
+        store.set_categories({fp: "Groceries"})
+        store.mark_file_processed(file_fingerprint(self._CB_TEXT.encode()))
+
+    def test_reupload_of_processed_file_backfills_null_balance(self, tmp_path):
+        store = Store(":memory:")
+        self._seed_legacy_row(store)
+
+        fake = FakeAnalyserClient()
+        report = run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+        rows = store.conn.execute("SELECT balance, category FROM transactions").fetchall()
+        balances = store.account_balances("2026-06")
+        store.close()
+
+        # File was recognised as already-processed (counted skipped)...
+        assert report.files_skipped == 1
+        # ...but was still parsed, so the balance was backfilled.
+        assert report.balance_updates == 1
+        assert len(rows) == 1, "no duplicate row"
+        assert rows[0]["balance"] == "1000.00"
+        assert rows[0]["category"] == "Groceries", "category untouched by balance reconciliation"
+
+        # Zero analyser calls — Layer 2 filters this row out as already-seen.
+        assert fake.call_count == 0
+        assert report.new_txns == 0
+        assert report.categorised == 0
+        assert report.model_used == ""
+        assert report.noop is False, "balance_updates > 0 must NOT be reported as a no-op"
+
+        # account_balances() now derives a real figure instead of unavailable.
+        assert balances["commbank"] == {"opening": "1072.40", "closing": "1000.00"}
+
+    def test_second_identical_reupload_is_a_true_noop(self, tmp_path):
+        """Once the balance has been backfilled, re-uploading the same bytes
+        again is a true no-op (balance_updates == 0, zero analyser calls)."""
+        store = Store(":memory:")
+        self._seed_legacy_row(store)
+        fake = FakeAnalyserClient()
+
+        run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+        second = run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert second.noop is True
+        assert second.balance_updates == 0
+        assert fake.call_count == 0

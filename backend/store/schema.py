@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     category             TEXT,
     year_month           TEXT NOT NULL,
     created_at           TEXT NOT NULL,
-    reclassified_by_rule INTEGER NOT NULL DEFAULT 0
+    reclassified_by_rule INTEGER NOT NULL DEFAULT 0,
+    balance              TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_txn_date       ON transactions(date);
@@ -54,6 +55,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE transactions "
             "ADD COLUMN reclassified_by_rule INTEGER NOT NULL DEFAULT 0"
         )
+    if "balance" not in cols:
+        conn.execute("ALTER TABLE transactions ADD COLUMN balance TEXT")
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
