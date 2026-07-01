@@ -514,3 +514,61 @@ class TestEmptyUploads:
         assert report.files_seen == 0
         assert report.excel_path is None
         assert fake.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# TestAutoDetect — parser chosen by file CONTENT, not the upload slot
+# ---------------------------------------------------------------------------
+
+class TestAutoDetect:
+    """A file is parsed by the profile matching its contents, whatever box it
+    was dropped in. Unrecognised files are rejected safely and not fingerprinted."""
+
+    def _run(self, uploads, store, tmp_path):
+        return run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+    def test_westpac_content_in_commbank_slot_still_parses(self, tmp_path):
+        store = Store(":memory:")
+        uploads = [UploadedFile(filename="mislabeled.csv", bank=Bank.COMMBANK, content=_WP_BYTES)]
+        report = self._run(uploads, store, tmp_path)
+        # Detected as Westpac -> its 2 rows ingested despite the wrong slot.
+        assert report.new_txns == 2
+        assert report.errors == []
+        rows = store.transactions_for_month()
+        descs = " ".join(r.description for r in rows)
+        # Westpac account-number column is still dropped after auto-detect.
+        assert _FAKE_ACCT not in descs
+        assert "SYNTH UTILITY BILL" in descs
+        store.close()
+
+    def test_commbank_content_in_westpac_slot_still_parses(self, tmp_path):
+        store = Store(":memory:")
+        uploads = [UploadedFile(filename="mislabeled.csv", bank=Bank.WESTPAC, content=_CB_BYTES)]
+        report = self._run(uploads, store, tmp_path)
+        assert report.new_txns == 3  # CommBank text has 3 rows
+        assert report.errors == []
+        store.close()
+
+    def test_unrecognised_file_errors_and_is_not_fingerprinted(self, tmp_path):
+        store = Store(":memory:")
+        garbage = b"not,a,bank,export\njust,random,junk,here\n"
+
+        def uploads():
+            return [UploadedFile(filename="junk.csv", bank=Bank.COMMBANK, content=garbage)]
+
+        r1 = self._run(uploads(), store, tmp_path)
+        assert r1.noop is True
+        assert any("unrecognised" in e.lower() for e in r1.errors)
+
+        # Not fingerprinted: an identical re-upload is NOT skipped as processed.
+        r2 = self._run(uploads(), store, tmp_path)
+        assert r2.files_skipped == 0
+        assert any("unrecognised" in e.lower() for e in r2.errors)
+        store.close()

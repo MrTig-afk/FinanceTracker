@@ -15,6 +15,7 @@ sanitiser, store, analyser, or any other stage.
 """
 
 from .base import BankParser, get_parser, parse_file, parse_text
+from .detect import detect_bank
 from .models import Bank, Transaction
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "get_parser",
     "parse_file",
     "parse_text",
+    "detect_bank",
 ]

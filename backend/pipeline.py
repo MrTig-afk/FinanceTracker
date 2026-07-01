@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from backend.data_source import Bank, Transaction, parse_text
+from backend.data_source import Bank, Transaction, detect_bank, parse_text
 from backend.idempotency import (
     file_fingerprint,
     filter_new_transactions,
@@ -141,23 +141,34 @@ def run_pipeline(
             continue
 
         # Decode: prefer UTF-8 with BOM stripping; fall back to replace-mode on error.
-        # All decode + parse work is wrapped so one bad file never aborts the batch.
         try:
-            try:
-                text = uf.content.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                text = uf.content.decode("utf-8", errors="replace")
+            text = uf.content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = uf.content.decode("utf-8", errors="replace")
 
-            txns = parse_text(text, uf.bank)
+        # Choose the parser by the file's ACTUAL contents, not the upload box it
+        # arrived in. A file that matches neither profile is rejected here and,
+        # crucially, NOT fingerprinted — so re-uploading a corrected file works.
+        detected: Bank | None = detect_bank(text)
+        if detected is None:
+            errors.append(f"unrecognised CSV format: {uf.filename}")
+            continue
+
+        # All parse work is wrapped so one bad file never aborts the batch.
+        try:
+            txns = parse_text(text, detected)
         except Exception:
             # Never include exception str — it could contain raw CSV values.
-            errors.append(f"failed to parse {uf.filename} ({uf.bank.value})")
+            errors.append(f"failed to parse {uf.filename} ({detected.value})")
             continue
 
         all_new_txns.extend(txns)
         # Mark processed AFTER a successful parse (even if 0 valid rows).
         store.mark_file_processed(fp)
-        logger.debug("file parsed: %s — %d rows", uf.filename, len(txns))
+        logger.debug(
+            "file parsed: %s — detected %s — %d rows",
+            uf.filename, detected.value, len(txns),
+        )
 
     # ------------------------------------------------------------------
     # Layer 2 — transaction-level dedupe (FR-13 / FR-15)
