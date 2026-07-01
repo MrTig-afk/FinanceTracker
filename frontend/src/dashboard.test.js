@@ -58,6 +58,7 @@ const DOM_HTML = `
   <button id="refresh"></button>
   <input id="fuel-rule-toggle" type="checkbox" />
   <div id="fuel-note"></div>
+  <div id="balances"></div>
 `;
 
 // ---------------------------------------------------------------------------
@@ -114,6 +115,15 @@ const INCOME_ONLY_SUMMARY = {
   fuel_rule_applied: false,
   fuel_rule_eligible: 0,
   fuel_rule_eligible_amount: '0.00',
+};
+
+/** Two accounts; Westpac closing undetermined. */
+const BALANCES_SUMMARY = {
+  ...SYNTHETIC_SUMMARY,
+  account_balances: {
+    commbank: { opening: '1000.00', closing: '918.10' },
+    westpac: { opening: '2000.00', closing: null },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -396,6 +406,45 @@ describe('render(summary, { pulse: true })', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Account balances (T9) — local-only, never $0.00 in place of unavailable
+// ---------------------------------------------------------------------------
+
+describe('render populates #balances', () => {
+  it('renders one .balance-row per bank with formatted opening/closing', () => {
+    dash.render(BALANCES_SUMMARY);
+    const rows = document.querySelectorAll('#balances .balance-row');
+    expect(rows.length).toBe(2);
+  });
+
+  it('CommBank row shows formatted opening and closing figures', () => {
+    dash.render(BALANCES_SUMMARY);
+    const rows = document.querySelectorAll('#balances .balance-row');
+    const cbRow = [...rows].find((r) =>
+      r.querySelector('.balance-row-bank').textContent === 'CommBank',
+    );
+    const figures = cbRow.querySelector('.balance-row-figures').textContent;
+    expect(figures).toContain(formatCurrency('1000.00'));
+    expect(figures).toContain(formatCurrency('918.10'));
+  });
+
+  it('a null side renders — not $0.00', () => {
+    dash.render(BALANCES_SUMMARY);
+    const rows = document.querySelectorAll('#balances .balance-row');
+    const wpRow = [...rows].find((r) =>
+      r.querySelector('.balance-row-bank').textContent === 'Westpac',
+    );
+    const figures = wpRow.querySelector('.balance-row-figures').textContent;
+    expect(figures).toContain('—');
+    expect(figures).not.toContain('$0.00');
+  });
+
+  it('no account_balances -> #balances has no .balance-row elements', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    expect(document.querySelectorAll('#balances .balance-row').length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // showEmpty
 // ---------------------------------------------------------------------------
 
@@ -431,6 +480,13 @@ describe('showEmpty', () => {
     document.getElementById('fuel-rule-toggle').checked = true;
     dash.showEmpty();
     expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
+  });
+
+  it('clears #balances', () => {
+    dash.render(BALANCES_SUMMARY);
+    expect(document.querySelectorAll('#balances .balance-row').length).toBeGreaterThan(0);
+    dash.showEmpty();
+    expect(document.getElementById('balances').textContent).toBe('');
   });
 });
 

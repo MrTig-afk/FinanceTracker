@@ -726,6 +726,51 @@ a.nav-item {
   animation: ftNoteIn 0.5s ease;
 }
 
+/* ── Account balances card (local-only) ─────────────────────── */
+.balances-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation-delay: 0.14s;
+}
+
+.balances-card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.balances-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.balance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.balance-row-bank {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.balance-row-figures {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.balances-empty {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* ── Fuel-stop spring switch ─────────────────────────────── */
 .fuel-switch {
   position: relative;

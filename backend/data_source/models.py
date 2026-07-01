@@ -2,6 +2,9 @@
 
 Transaction is the normalised output of every per-bank parser.
 Bank identifies the source and is metadata only; it is never sent off-machine.
+balance is SENSITIVE and LOCAL-ONLY: it is captured for the local dashboard's
+opening/closing display and must never reach the sanitiser output, the audit
+log, or any off-machine request.
 """
 from __future__ import annotations
 
@@ -22,3 +25,4 @@ class Transaction:
     description: str     # RAW description (outer whitespace stripped only); NOT sanitised here
     amount: Decimal      # signed: debit negative, credit positive
     bank: Bank           # source bank — lets later stages fingerprint/segregate without re-parsing
+    balance: Decimal | None = None  # running balance AFTER this txn; LOCAL-ONLY, never sent off-machine

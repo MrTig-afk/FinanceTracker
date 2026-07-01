@@ -19,7 +19,12 @@ from backend.data_source import (
     parse_file,
     parse_text,
 )
-from backend.data_source.common import iter_csv_rows, parse_amount, parse_date
+from backend.data_source.common import (
+    iter_csv_rows,
+    parse_amount,
+    parse_date,
+    parse_optional_amount,
+)
 
 # ---------------------------------------------------------------------------
 # Synthetic constants — invented values only; never real data
@@ -234,9 +239,9 @@ class TestWestpacParser:
         assert FAKE_ACCOUNT not in str(t.date)
         assert FAKE_ACCOUNT not in str(t.amount)
         assert FAKE_ACCOUNT not in str(t.bank)
-        # The dataclass must have exactly the four expected fields — no bonus attribute.
+        # The dataclass must have exactly the five expected fields — no bonus attribute.
         field_names = {f.name for f in dataclasses.fields(t)}
-        assert field_names == {"date", "description", "amount", "bank"}
+        assert field_names == {"date", "description", "amount", "bank", "balance"}
 
     def test_account_number_scientific_notation_absent_from_description(self):
         """Account number in scientific notation (e.g. 7.48007E+11) must not appear in description."""
@@ -603,3 +608,111 @@ class TestParseFile:
         assert txns[0].amount == Decimal("-12.00")
         assert txns[1].description == "SALARY"
         assert txns[1].amount == Decimal("2000.00")
+
+
+# ---------------------------------------------------------------------------
+# T1 — Parser captures balance (both banks)
+# ---------------------------------------------------------------------------
+
+class TestBalanceCaptured:
+    """T1: both parsers capture the running-balance column into Transaction.balance."""
+
+    def test_commbank_balance_captured(self):
+        csv_text = _commbank_csv("15-01-2025,-42.50,ACME CAFE,957.50")
+        txns = parse_text(csv_text, "commbank")
+        assert len(txns) == 1
+        assert txns[0].balance == Decimal("957.50")
+
+    def test_westpac_balance_captured(self):
+        csv_text = _westpac_csv(
+            f"{FAKE_ACCOUNT},15-01-2025,ACME CAFE,42.50,,957.50,PAYMENT,",
+        )
+        txns = parse_text(csv_text, "westpac")
+        assert len(txns) == 1
+        assert txns[0].balance == Decimal("957.50")
+
+    def test_commbank_balance_is_decimal_not_float(self):
+        csv_text = _commbank_csv("16-01-2025,-10.00,TEST MART,500.00")
+        txns = parse_text(csv_text, "commbank")
+        assert type(txns[0].balance) is Decimal
+
+    def test_westpac_balance_is_decimal_not_float(self):
+        csv_text = _westpac_csv(
+            f"{FAKE_ACCOUNT},16-01-2025,TEST MART,10.00,,500.00,PAYMENT,",
+        )
+        txns = parse_text(csv_text, "westpac")
+        assert type(txns[0].balance) is Decimal
+
+
+# ---------------------------------------------------------------------------
+# T2 — Nullable balance
+# ---------------------------------------------------------------------------
+
+class TestBalanceNullable:
+    """T2: a missing/blank/malformed balance yields balance=None; the row is still ingested."""
+
+    def test_commbank_short_row_no_balance_cell(self):
+        """A CommBank row with exactly 3 columns (no balance cell) -> balance None."""
+        csv_text = "17-01-2025,-5.00,TEST MART\n"
+        txns = parse_text(csv_text, "commbank")
+        assert len(txns) == 1
+        assert txns[0].balance is None
+
+    def test_commbank_malformed_balance_yields_none(self):
+        csv_text = _commbank_csv("18-01-2025,-5.00,TEST MART,abc")
+        txns = parse_text(csv_text, "commbank")
+        assert len(txns) == 1
+        assert txns[0].balance is None
+
+    def test_westpac_blank_balance_cell_yields_none(self):
+        csv_text = _westpac_csv(
+            f"{FAKE_ACCOUNT},19-01-2025,TEST MART,5.00,,,PAYMENT,",
+        )
+        txns = parse_text(csv_text, "westpac")
+        assert len(txns) == 1
+        assert txns[0].balance is None
+
+    def test_westpac_malformed_balance_yields_none(self):
+        csv_text = _westpac_csv(
+            f"{FAKE_ACCOUNT},20-01-2025,TEST MART,5.00,,not-a-number,PAYMENT,",
+        )
+        txns = parse_text(csv_text, "westpac")
+        assert len(txns) == 1
+        assert txns[0].balance is None
+
+    def test_transaction_default_balance_is_none(self):
+        """Constructing a Transaction without balance keeps existing call sites working."""
+        t = Transaction(
+            date=datetime.date(2025, 1, 1),
+            description="TEST",
+            amount=Decimal("-1.00"),
+            bank=Bank.COMMBANK,
+        )
+        assert t.balance is None
+
+
+# ---------------------------------------------------------------------------
+# parse_optional_amount helper tests
+# ---------------------------------------------------------------------------
+
+class TestParseOptionalAmount:
+    """Unit tests for the common.parse_optional_amount helper — never raises."""
+
+    def test_valid_amount_parses(self):
+        assert parse_optional_amount("957.50") == Decimal("957.50")
+
+    def test_dollar_thousands_amount_parses(self):
+        assert parse_optional_amount("$1,234.56") == Decimal("1234.56")
+
+    def test_empty_string_returns_none(self):
+        assert parse_optional_amount("") is None
+
+    def test_whitespace_only_returns_none(self):
+        assert parse_optional_amount("   ") is None
+
+    def test_malformed_string_returns_none_not_raise(self):
+        assert parse_optional_amount("not-a-number") is None
+
+    def test_result_is_decimal_not_float(self):
+        result = parse_optional_amount("100.00")
+        assert type(result) is Decimal

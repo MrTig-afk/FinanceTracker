@@ -14,6 +14,7 @@ import {
   computeNet,
   monthLabel,
   spendTotal,
+  accountBalances,
 } from './summary.js';
 
 // ---------------------------------------------------------------------------
@@ -325,5 +326,62 @@ describe('monthLabel', () => {
 
   it('handles December correctly', () => {
     expect(monthLabel('2025-12')).toBe('December 2025');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// accountBalances — T8
+// ---------------------------------------------------------------------------
+
+describe('accountBalances', () => {
+  it('happy path: both banks, CommBank before Westpac', () => {
+    const summary = {
+      account_balances: {
+        westpac: { opening: '500.00', closing: '550.00' },
+        commbank: { opening: '100.00', closing: '75.00' },
+      },
+    };
+    const rows = accountBalances(summary);
+    expect(rows).toEqual([
+      { bank: 'commbank', label: 'CommBank', opening: 100, closing: 75 },
+      { bank: 'westpac', label: 'Westpac', opening: 500, closing: 550 },
+    ]);
+  });
+
+  it('missing account_balances key returns []', () => {
+    expect(accountBalances({})).toEqual([]);
+  });
+
+  it('empty account_balances object returns []', () => {
+    expect(accountBalances({ account_balances: {} })).toEqual([]);
+  });
+
+  it('null opening/closing pass through as null (never coerced to 0)', () => {
+    const summary = {
+      account_balances: { commbank: { opening: null, closing: null } },
+    };
+    const rows = accountBalances(summary);
+    expect(rows).toEqual([
+      { bank: 'commbank', label: 'CommBank', opening: null, closing: null },
+    ]);
+  });
+
+  it('only one bank present -> single-entry array', () => {
+    const summary = {
+      account_balances: { westpac: { opening: '10.00', closing: '20.00' } },
+    };
+    const rows = accountBalances(summary);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].label).toBe('Westpac');
+  });
+
+  it('unknown bank key is defensively capitalised, never throws', () => {
+    const summary = {
+      account_balances: { revolut: { opening: '1.00', closing: '2.00' } },
+    };
+    const rows = accountBalances(summary);
+    expect(rows).toEqual([
+      { bank: 'revolut', label: 'Revolut', opening: 1, closing: 2 },
+    ]);
   });
 });
