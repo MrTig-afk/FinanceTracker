@@ -313,12 +313,13 @@ class TestFileFingerPrintSkip:
 # ---------------------------------------------------------------------------
 
 class TestFailClosedRow:
-    """Description with 4-digit residue → dropped by sanitiser, stored as 'Other',
-    never sent to the analyser (FR-21 fail-closed gate)."""
+    """A description that scrubs to nothing safe → dropped by sanitiser, stored as
+    'Other', never sent to the analyser (FR-21 fail-closed gate)."""
 
-    # "SHOP 1234": the "1234" survives the 6+ digit scrubber but fires the
-    # \d{4,} residual check → row dropped.
-    _DROP_DESC = "SHOP 1234"
+    # A bare email address is scrubbed to an empty string → the fail-closed gate
+    # drops the row. (Note: a store number like "SHOP 1234" is NOT dropped under
+    # the strip-all-digits policy — the digits are stripped and "SHOP" is kept.)
+    _DROP_DESC = "leak@bad.test"
     _DROP_AMT = "-5.00"
     _GOOD_DESC = "WOOLWORTHS METRO"
     _GOOD_AMT = "-72.40"
@@ -362,8 +363,8 @@ class TestFailClosedRow:
         assert self._DROP_DESC not in all_prompts, (
             f"Fail-closed description {self._DROP_DESC!r} leaked into analyser payload"
         )
-        # Verify the 4-digit run itself is also absent
-        assert "1234" not in all_prompts
+        # Verify the email local-part is also absent
+        assert "leak" not in all_prompts
 
     def test_good_row_categorised(self):
         """Non-dropped row is categorised via the fake analyser."""

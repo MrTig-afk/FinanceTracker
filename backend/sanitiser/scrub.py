@@ -132,11 +132,19 @@ RE_REF_CODE = re.compile(
     re.IGNORECASE,
 )
 
-# ── Step 9: Remaining long digit runs (6+) ────────────────────────────────────
-# After all specific patterns have run, strip any leftover 6+ digit sequence
-# (trailing serials, mobile references such as "MOBILE 1136212", etc.).
-# The fail-closed re-scan (step 4+ below) catches 4-5 digit residue as well.
-RE_LONG_DIGITS = re.compile(r"\b\d{6,}\b")
+# ── Step 9: Remaining digits — strip ALL of them ──────────────────────────────
+# After all specific patterns (card, BSB, phone, partial-card, refs) have run as
+# whole units, remove EVERY remaining digit run of any length.  Policy: no number
+# of any kind leaves the machine — not store numbers ("WOOLWORTHS 1234 SYDNEY"),
+# not serials, not partial cards, not amounts embedded in text.  This is the
+# simplest and strongest rule: strip the digits, keep the readable merchant name
+# so the analyser can still categorise it.
+#
+# Only the digits are removed; the surrounding letters survive, so
+# "WOOLWORTHS 1234 SYDNEY" → "WOOLWORTHS SYDNEY".  Because nothing numeric can
+# remain, the \d{4,} residual gate below never has digit residue to catch — it is
+# kept purely as a belt-and-braces guarantee.
+RE_LONG_DIGITS = re.compile(r"\d+")
 
 # ── Step 10: Whitespace collapse ──────────────────────────────────────────────
 # Collapse any run of whitespace (spaces, tabs, non-breaking spaces) to a
@@ -200,8 +208,9 @@ def has_residual_identifier(cleaned: str) -> bool:
     Conservative: prefer dropping over leaking.  Returns True if ANY of:
     • The string is empty (or whitespace-only) after scrubbing.
     • It still contains '@' (email/PayID handle residue).
-    • It contains any run of 4+ consecutive digits (tighter than the 6+ scrub
-      threshold — belt-and-braces second gate).
+    • It contains any run of 4+ consecutive digits.  Scrub step 9 strips ALL
+      digits, so this normally has nothing to catch — it is a belt-and-braces
+      guarantee that no 4+ digit run can escape even if a scrubber regresses.
     • It re-matches RE_BSB, RE_PHONE, or RE_EMAIL.
     • It contains a transfer-name marker: a {payid, payto, osko, bpay} keyword
       immediately followed by a Capitalised word token (leftover person name).

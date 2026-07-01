@@ -176,30 +176,41 @@ class TestFailClosed:
         assert 0 in result.dropped
         assert all(s.row_index != 0 for s in result.payload)
 
-    def test_four_digit_residue_is_dropped(self):
-        """Description with a 4-digit residue (below 6+ scrub, above 4 residual gate) → dropped."""
-        # "1234" survives all scrubbers (need 6+ for RE_LONG_DIGITS) but fires \d{4,} residual
+    def test_four_digit_store_number_stripped_row_kept(self):
+        """A 4-digit store number is stripped; the row is KEPT with its readable name."""
+        # Policy: strip the digits, keep the name — not drop the whole row.
         txns = [_txn("SHOP 1234")]
         result = sanitise(txns, audit=False)
 
-        assert 0 in result.dropped
-        assert len(result.payload) == 0
+        assert 0 not in result.dropped
+        assert len(result.payload) == 1
+        assert result.payload[0].cleaned_description == "SHOP"
+        assert "1234" not in result.payload[0].cleaned_description
 
-    def test_five_digit_residue_is_dropped(self):
-        """Description with a 5-digit residue → dropped (5 >= 4 residual threshold)."""
+    def test_five_digit_store_number_stripped_row_kept(self):
+        """A 5-digit store number is stripped; the row is KEPT with its name."""
         txns = [_txn("STORE 12345")]
         result = sanitise(txns, audit=False)
 
-        assert 0 in result.dropped
+        assert 0 not in result.dropped
+        assert result.payload[0].cleaned_description == "STORE"
 
-    def test_three_digit_number_passes_through(self):
-        """A description with only a 3-digit number is NOT dropped (below 4-digit threshold)."""
+    def test_short_number_also_stripped(self):
+        """Policy: ANY digit run is stripped, including short 1-3 digit numbers."""
         txns = [_txn("AISLE 123")]
         result = sanitise(txns, audit=False)
 
         assert len(result.payload) == 1
-        assert result.payload[0].cleaned_description == "AISLE 123"
+        assert result.payload[0].cleaned_description == "AISLE"
         assert 0 not in result.dropped
+
+    def test_number_only_description_dropped_as_empty(self):
+        """A description that is ONLY digits scrubs to '' and is dropped (fail-closed)."""
+        txns = [_txn("123456789")]
+        result = sanitise(txns, audit=False)
+
+        assert 0 in result.dropped
+        assert len(result.payload) == 0
 
     def test_bare_at_sign_is_dropped(self):
         """Description with a bare '@' (no TLD — email scrubber misses it) → dropped via '@' check."""
@@ -229,7 +240,7 @@ class TestFailClosed:
         """payload row_indexes and dropped indexes must be completely disjoint sets."""
         txns = [
             _txn("WOOLWORTHS METRO", "-42.00"),   # idx 0 — passes
-            _txn("SHOP 1234", "-5.00"),            # idx 1 — dropped (4-digit residue)
+            _txn("leak@bad.test", "-5.00"),        # idx 1 — dropped (bare email → empty)
             _txn("CORNER BAKERY", "-8.50"),        # idx 2 — passes
         ]
         result = sanitise(txns, audit=False)
@@ -245,7 +256,7 @@ class TestFailClosed:
         """All row_indexes (payload + dropped) are within range(len(input))."""
         txns = [
             _txn("MERCHANT ALPHA", "-10.00"),
-            _txn("SHOP 1234", "-5.00"),     # dropped
+            _txn("leak@bad.test", "-5.00"),     # dropped (bare email)
             _txn("MERCHANT BETA", "-15.00"),
         ]
         result = sanitise(txns, audit=False)
@@ -269,7 +280,7 @@ class TestFailClosed:
         """When the middle row is dropped, surrounding rows keep their original input positions."""
         txns = [
             _txn("ALPHA MERCHANT", "-10.00"),   # idx 0 — passes
-            _txn("SHOP 1234", "-5.00"),          # idx 1 — dropped (4-digit residue)
+            _txn("leak@bad.test", "-5.00"),      # idx 1 — dropped (bare email)
             _txn("GAMMA MERCHANT", "-15.00"),    # idx 2 — passes
         ]
         result = sanitise(txns, audit=False)
@@ -379,16 +390,14 @@ class TestScrubClasses:
         assert "ABC123456" not in cleaned
         assert "PAYMENT" in cleaned
 
-    def test_multispace_input_4digit_residue_is_dropped(self):
-        """'WOOLWORTHS    1234   ' → multispace collapsed; 4-digit residue fires drop gate."""
+    def test_multispace_and_store_number_collapsed_row_kept(self):
+        """'WOOLWORTHS    1234   ' → digits stripped, whitespace collapsed, row KEPT."""
         txns = [_txn("WOOLWORTHS    1234   ")]
         result = sanitise(txns, audit=False)
 
-        # 4-digit residue '1234' survives all scrubbers but fires \d{4,} residual check
-        assert 0 in result.dropped, (
-            "Row with 4-digit residue must be dropped, not sent"
-        )
-        assert len(result.payload) == 0
+        assert 0 not in result.dropped
+        assert len(result.payload) == 1
+        assert result.payload[0].cleaned_description == "WOOLWORTHS"
 
     def test_multispace_raw_string_not_in_payload(self):
         """'WOOLWORTHS    1234   ' must not appear in payload with raw whitespace or digit run."""
@@ -400,6 +409,79 @@ class TestScrubClasses:
             "    " in s.cleaned_description or "1234" in s.cleaned_description
             for s in result.payload
         )
+
+
+# ---------------------------------------------------------------------------
+# Digit-stripping policy — strip ALL digits, keep the readable merchant name
+# ---------------------------------------------------------------------------
+
+
+class TestDigitStripping:
+    """Policy: every digit run is stripped from the description; the readable name
+    survives so the analyser can categorise it. No number of any length ever
+    reaches the payload. This is what keeps Woolworths/Coles/Aldi (whose EFTPOS
+    descriptions carry a store number) out of 'Other' and in 'Groceries'.
+    """
+
+    def test_woolworths_store_number_stripped_name_survives(self):
+        """'WOOLWORTHS 1234 SYDNEY' → 'WOOLWORTHS SYDNEY' (row kept)."""
+        txns = [_txn("WOOLWORTHS 1234 SYDNEY", "-82.45")]
+        result = sanitise(txns, audit=False)
+
+        assert len(result.payload) == 1
+        assert result.payload[0].cleaned_description == "WOOLWORTHS SYDNEY"
+
+    def test_coles_store_number_stripped(self):
+        """'COLES 5678 MELBOURNE' → 'COLES MELBOURNE' (Westpac row kept)."""
+        txns = [_txn("COLES 5678 MELBOURNE", "-64.30", bank=Bank.WESTPAC)]
+        result = sanitise(txns, audit=False)
+
+        assert result.payload[0].cleaned_description == "COLES MELBOURNE"
+
+    def test_aldi_store_number_stripped(self):
+        """'ALDI 4321' → 'ALDI' (row kept)."""
+        txns = [_txn("ALDI 4321", "-30.00")]
+        result = sanitise(txns, audit=False)
+
+        assert result.payload[0].cleaned_description == "ALDI"
+
+    def test_asian_grocer_with_store_number_survives(self):
+        """An obvious grocer name survives with its store number stripped."""
+        txns = [_txn("GREAT WALL ASIAN SUPERMARKET 1234", "-40.00")]
+        result = sanitise(txns, audit=False)
+
+        assert result.payload[0].cleaned_description == "GREAT WALL ASIAN SUPERMARKET"
+
+    def test_digit_embedded_in_token_stripped(self):
+        """Digits fused to letters are stripped too: 'STORE99' → 'STORE'."""
+        assert scrub_description("STORE99") == "STORE"
+
+    def test_scrub_strips_all_digits_keeps_letters(self):
+        """scrub_description removes every digit run, keeping the letters."""
+        assert scrub_description("WOOLWORTHS 1234 SYDNEY") == "WOOLWORTHS SYDNEY"
+        assert scrub_description("CAFE 42") == "CAFE"
+        assert scrub_description("FUEL 900123 HIGHWAY") == "FUEL HIGHWAY"
+
+    def test_no_digit_ever_reaches_payload(self):
+        """Property: across many synthetic descriptions carrying numbers, NO digit
+        character appears in ANY payload item."""
+        import re as _re
+
+        txns = [
+            _txn("WOOLWORTHS 1234 SYDNEY"),
+            _txn("COLES 5678"),
+            _txn("ALDI 4321 STORE"),
+            _txn("BAKERY 7 CENTRAL"),
+            _txn("CAFE 42"),
+            _txn("FUEL 900123 HIGHWAY"),
+            _txn("MYKI TOPUP 55"),
+        ]
+        result = sanitise(txns, audit=False)
+
+        for s in result.payload:
+            assert not _re.search(r"\d", s.cleaned_description), (
+                f"digit leaked into payload: {s.cleaned_description!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +655,7 @@ class TestHappyPath:
         """Re-running sanitise on the same input produces identical payload content (FR-19)."""
         txns = [
             _txn("WOOLWORTHS METRO", "-42.75"),
-            _txn("SHOP 1234", "-5.00"),       # will be dropped
+            _txn("leak@bad.test", "-5.00"),   # will be dropped (bare email)
             _txn("CORNER BAKERY", "-8.99"),
         ]
         result1 = sanitise(txns, audit=False)
