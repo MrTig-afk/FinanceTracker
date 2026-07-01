@@ -14,6 +14,8 @@ import {
   postReclassify,
   fetchCategoryContext,
   saveCategoryContext,
+  postPushSubscribe,
+  postPushUnsubscribe,
   ApiError,
 } from './api.js';
 
@@ -518,5 +520,73 @@ describe('fetchStatus', () => {
     vi.stubGlobal('fetch', mockFetch);
     await fetchStatus();
     expect(mockFetch.mock.calls[0][0]).toContain('/status');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// postPushSubscribe / postPushUnsubscribe — v2 Pass 3 (SYNTHETIC subscription only)
+// ---------------------------------------------------------------------------
+
+const CANNED_SYNTH_SUB = {
+  endpoint: 'https://example.test/push/SYNTH_ENDPOINT',
+  keys: { p256dh: 'synth_p256dh', auth: 'synth_auth' },
+};
+
+describe('postPushSubscribe', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch({ ok: true }));
+    const result = await postPushSubscribe(CANNED_SYNTH_SUB);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('POSTs the subscription JSON body to /push/subscribe', async () => {
+    const mockFetch = makeOkFetch({ ok: true });
+    vi.stubGlobal('fetch', mockFetch);
+    await postPushSubscribe(CANNED_SYNTH_SUB);
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/push/subscribe');
+    expect(options.method).toBe('POST');
+    expect(options.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(options.body)).toEqual(CANNED_SYNTH_SUB);
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(422));
+    await expect(postPushSubscribe(CANNED_SYNTH_SUB)).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await postPushSubscribe(CANNED_SYNTH_SUB).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+describe('postPushUnsubscribe', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch({ ok: true, removed: 1 }));
+    const result = await postPushUnsubscribe(CANNED_SYNTH_SUB.endpoint);
+    expect(result).toEqual({ ok: true, removed: 1 });
+  });
+
+  it('POSTs {endpoint} JSON body to /push/unsubscribe', async () => {
+    const mockFetch = makeOkFetch({ ok: true, removed: 1 });
+    vi.stubGlobal('fetch', mockFetch);
+    await postPushUnsubscribe(CANNED_SYNTH_SUB.endpoint);
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/push/unsubscribe');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body)).toEqual({ endpoint: CANNED_SYNTH_SUB.endpoint });
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(postPushUnsubscribe(CANNED_SYNTH_SUB.endpoint)).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await postPushUnsubscribe(CANNED_SYNTH_SUB.endpoint).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
   });
 });

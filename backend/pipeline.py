@@ -9,6 +9,8 @@ Composes the already-built stages in the exact order defined by the spec:
   Layer 2  — per-transaction fingerprint dedupe (skip rows already in the store)
   Layer 3  — categorise only-new rows via the sanitiser + analyser
   Output   — one monthly Excel workbook per distinct month; optional Drive upload
+  Notify   — best-effort generic "processed" push (v2 Pass 3; inert scaffold, see
+             backend.notifier — fail-closed no-op unless explicitly activated)
 
 Privacy contract
 ----------------
@@ -18,6 +20,8 @@ Privacy contract
   the sanitised SanitiseResult.payload — (row_index, cleaned_description, amount) tuples.
 - Error messages in RunReport.errors are fixed safe strings; they never contain raw
   descriptions, amounts, account numbers, or exception str() output.
+- The push-notification step (see Notify above) is feature-flagged OFF by default and
+  never sends transaction data even when active — see backend/notifier.
 
 Injectable seams
 ----------------
@@ -45,6 +49,7 @@ from backend.analyser import categorise, build_context_prompt
 from backend.store import Store
 from backend.excel_builder import build_workbook
 from backend.drive_uploader import upload_file
+from backend.notifier import send_processed_notification
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +300,13 @@ def run_pipeline(
         except Exception:
             # Never include exception str — it could contain file paths or raw data.
             errors.append(f"excel/drive step failed for {ym}")
+
+    # Best-effort generic "processed" push (v2 Pass 3). HARD no-op unless PUSH_ENABLED
+    # + real VAPID keys are configured (fail-closed). Never sends transaction data.
+    try:
+        send_processed_notification(store)
+    except Exception:
+        logger.debug("push notification step skipped")
 
     return RunReport(
         files_seen=len(uploads),

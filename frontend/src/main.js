@@ -4,7 +4,7 @@
  * No secrets here. No transaction data.
  */
 
-import { fetchSummary, fetchStatus, postReclassify } from './api.js';
+import { fetchSummary, fetchStatus, postReclassify, postPushSubscribe, postPushUnsubscribe } from './api.js';
 import { createDashboard } from './dashboard.js';
 import { createQueue } from './queue.js';
 import { createUploadController } from './uploadController.js';
@@ -16,6 +16,7 @@ import { createMonthly } from './monthlyController.js';
 import { createYearly } from './yearlyController.js';
 import { createTrends } from './trendsController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
+import { createPushController } from './push.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -157,6 +158,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Drain anything queued from a previous offline session.
   queue.flush({ postFn: (form) => postUpload(form) }).catch(() => {});
+
+  // -------------------------------------------------------------------------
+  // Push notifications (v2 Pass 3 — inert scaffold). Degrades gracefully when
+  // unsupported / denied / not configured (placeholder VAPID key) — never throws.
+  // -------------------------------------------------------------------------
+  createPushController({
+    root: document,
+    api: { subscribe: postPushSubscribe, unsubscribe: postPushUnsubscribe },
+  });
 
   // -------------------------------------------------------------------------
   // Manual refresh (FR-34 v1: no push — manual refresh button satisfies spec).

@@ -939,6 +939,30 @@ a.nav-item {
   color: #c62828;
 }
 
+.upload-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* ── Push notifications card (v2 Pass 3 — inert scaffold) ─ */
+.push-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.push-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.push-desc {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
 /* ── Views (Overview / Upload / Category context) ───────── */
 .view[hidden] {
   display: none;

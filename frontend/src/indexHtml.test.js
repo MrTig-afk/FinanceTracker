@@ -149,3 +149,42 @@ describe('index.html — Overview mini spend-over-time bar', () => {
     expect(html).toContain('Spending over the last 6 months');
   });
 });
+
+// ---------------------------------------------------------------------------
+// v2 Pass 3 — push-notification control in the Upload view.
+// ---------------------------------------------------------------------------
+
+describe('index.html — push notification control (v2 Pass 3)', () => {
+  it('has a #push-card section', () => {
+    expect(html).toContain('id="push-card"');
+  });
+
+  it('#push-card appears after #upload-card in document order (Upload view placement)', () => {
+    expect(html.indexOf('id="upload-card"')).toBeGreaterThan(-1);
+    expect(html.indexOf('id="push-card"')).toBeGreaterThan(html.indexOf('id="upload-card"'));
+  });
+
+  it('contains #enable-push and #push-status', () => {
+    expect(html).toContain('id="enable-push"');
+    expect(html).toContain('id="push-status"');
+  });
+
+  it('the enable-push button text is the exact spec string with no em-dash/emoji', () => {
+    const buttonMatch = html.match(/<button id="enable-push"[^>]*>([^<]*)<\/button>/);
+    expect(buttonMatch).not.toBeNull();
+    expect(buttonMatch[1]).toBe('Enable notifications');
+    expect(buttonMatch[1]).not.toContain('—');
+  });
+
+  it('#push-status starts empty (populated by JS, not hardcoded)', () => {
+    const statusMatch = html.match(/<p id="push-status"[^>]*>([^<]*)<\/p>/);
+    expect(statusMatch).not.toBeNull();
+    expect(statusMatch[1].trim()).toBe('');
+  });
+
+  it('does not add a new Settings/History nav item for push (nav stays inert)', () => {
+    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/)[0];
+    expect(navMatch).not.toContain('data-view="push"');
+    expect(navMatch).not.toContain('data-view="notifications"');
+  });
+});

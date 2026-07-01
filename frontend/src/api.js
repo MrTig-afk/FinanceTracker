@@ -1,8 +1,8 @@
 /**
  * api.js — network layer.
  * Talks to the owner's own backend only (/summary, /month, /year, /trends,
- * /status, /reclassify, /category-context). No secrets here. VITE_API_BASE is
- * a non-secret URL (localhost / Tailscale).
+ * /status, /reclassify, /category-context, /push/subscribe, /push/unsubscribe).
+ * No secrets here. VITE_API_BASE is a non-secret URL (localhost / Tailscale).
  */
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
@@ -194,6 +194,57 @@ export async function saveCategoryContext(categories) {
       method: 'PUT',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Store the caller's own device Web Push subscription on the backend (local-only;
+ * no off-machine call from this app — the backend stores it locally).
+ * @param {object} subscription  PushSubscription.toJSON() shape: {endpoint, keys}.
+ * @returns {Promise<object>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function postPushSubscribe(subscription) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/push/subscribe`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(subscription),
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Remove a stored Web Push subscription on the backend by endpoint.
+ * @param {string} endpoint
+ * @returns {Promise<object>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function postPushUnsubscribe(endpoint) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/push/unsubscribe`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
     });
   } catch (e) {
     throw new ApiError('network error', { cause: e });

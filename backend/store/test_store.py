@@ -1695,3 +1695,109 @@ class TestCategoryTrend:
                     _assert_no_float(v)
 
         _assert_no_float(result)
+
+
+# ---------------------------------------------------------------------------
+# TestPushSubscriptionStore — v2 Pass 3 (inert scaffold; LOCAL-ONLY storage)
+#
+# All endpoints/keys below are SYNTHETIC — never real Web Push subscription
+# data. This module is exercised purely as local SQLite storage; no network
+# code is involved anywhere in this class.
+# ---------------------------------------------------------------------------
+
+
+_SYNTH_SUB_A = {
+    "endpoint": "https://example.test/push/AAA",
+    "keys": {"p256dh": "k_p256dh_a", "auth": "k_auth_a"},
+}
+_SYNTH_SUB_B = {
+    "endpoint": "https://example.test/push/BBB",
+    "keys": {"p256dh": "k_p256dh_b", "auth": "k_auth_b"},
+}
+
+
+class TestPushSubscriptionStore:
+    def test_upsert_then_list_returns_shape(self) -> None:
+        with Store(":memory:") as store:
+            store.upsert_push_subscription(_SYNTH_SUB_A)
+            subs = store.list_push_subscriptions()
+
+        assert subs == [_SYNTH_SUB_A]
+
+    def test_list_empty_on_fresh_store(self) -> None:
+        with Store(":memory:") as store:
+            assert store.list_push_subscriptions() == []
+
+    def test_upsert_two_distinct_endpoints_both_listed(self) -> None:
+        with Store(":memory:") as store:
+            store.upsert_push_subscription(_SYNTH_SUB_A)
+            store.upsert_push_subscription(_SYNTH_SUB_B)
+            subs = store.list_push_subscriptions()
+
+        endpoints = {s["endpoint"] for s in subs}
+        assert endpoints == {_SYNTH_SUB_A["endpoint"], _SYNTH_SUB_B["endpoint"]}
+        assert len(subs) == 2
+
+    def test_upsert_same_endpoint_twice_updates_keys_no_duplicate(self) -> None:
+        updated = {
+            "endpoint": _SYNTH_SUB_A["endpoint"],
+            "keys": {"p256dh": "k_p256dh_a_UPDATED", "auth": "k_auth_a_UPDATED"},
+        }
+        with Store(":memory:") as store:
+            store.upsert_push_subscription(_SYNTH_SUB_A)
+            store.upsert_push_subscription(updated)
+            subs = store.list_push_subscriptions()
+
+        assert len(subs) == 1, "re-subscribing the same endpoint must not duplicate the row"
+        assert subs[0]["keys"] == updated["keys"]
+
+    def test_delete_returns_one_then_zero_idempotent(self) -> None:
+        with Store(":memory:") as store:
+            store.upsert_push_subscription(_SYNTH_SUB_A)
+            first = store.delete_push_subscription(_SYNTH_SUB_A["endpoint"])
+            second = store.delete_push_subscription(_SYNTH_SUB_A["endpoint"])
+
+        assert first == 1
+        assert second == 0
+
+    def test_delete_leaves_list_empty(self) -> None:
+        with Store(":memory:") as store:
+            store.upsert_push_subscription(_SYNTH_SUB_A)
+            store.delete_push_subscription(_SYNTH_SUB_A["endpoint"])
+            assert store.list_push_subscriptions() == []
+
+    def test_delete_unknown_endpoint_is_safe_no_op(self) -> None:
+        with Store(":memory:") as store:
+            result = store.delete_push_subscription("https://example.test/push/NEVER_STORED")
+        assert result == 0
+
+    def test_upsert_missing_endpoint_raises_value_error(self) -> None:
+        bad = {"keys": {"p256dh": "x", "auth": "y"}}
+        with Store(":memory:") as store:
+            with pytest.raises(ValueError):
+                store.upsert_push_subscription(bad)
+
+    def test_upsert_missing_p256dh_raises_value_error(self) -> None:
+        bad = {"endpoint": "https://example.test/push/CCC", "keys": {"auth": "y"}}
+        with Store(":memory:") as store:
+            with pytest.raises(ValueError):
+                store.upsert_push_subscription(bad)
+
+    def test_upsert_missing_auth_raises_value_error(self) -> None:
+        bad = {"endpoint": "https://example.test/push/DDD", "keys": {"p256dh": "x"}}
+        with Store(":memory:") as store:
+            with pytest.raises(ValueError):
+                store.upsert_push_subscription(bad)
+
+    def test_upsert_missing_keys_dict_entirely_raises_value_error(self) -> None:
+        bad = {"endpoint": "https://example.test/push/EEE"}
+        with Store(":memory:") as store:
+            with pytest.raises(ValueError):
+                store.upsert_push_subscription(bad)
+
+    def test_failed_upsert_does_not_create_a_row(self) -> None:
+        bad = {"endpoint": "https://example.test/push/FFF", "keys": {"p256dh": "x"}}
+        with Store(":memory:") as store:
+            with pytest.raises(ValueError):
+                store.upsert_push_subscription(bad)
+            assert store.list_push_subscriptions() == []

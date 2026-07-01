@@ -986,3 +986,110 @@ class TestReuploadBackfillsNullBalance:
         assert second.noop is True
         assert second.balance_updates == 0
         assert fake.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# TestPushNotificationInvocation — v2 Pass 3 (inert scaffold)
+#
+# Asserts pipeline.py only calls send_processed_notification behind the flag
+# posture: a real (non-noop) run reaches the call site exactly once; a true
+# no-op run does not reach it at all. The notifier itself is a hard no-op by
+# default (see backend/notifier/test_notifier.py) — here we only verify the
+# CALL SITE behaviour and that pipeline never lets a notifier exception break
+# the run.
+# ---------------------------------------------------------------------------
+
+import backend.pipeline as pipeline_module
+
+
+class TestPushNotificationInvocation:
+    def test_real_run_calls_notifier_exactly_once(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            pipeline_module, "send_processed_notification", lambda store: calls.append(store) or 0
+        )
+
+        store = Store(":memory:")
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert len(calls) == 1
+
+    def test_noop_run_does_not_call_notifier(self, tmp_path, monkeypatch):
+        """A truly-identical re-upload (noop path) never reaches the notifier call site."""
+        calls = []
+        monkeypatch.setattr(
+            pipeline_module, "send_processed_notification", lambda store: calls.append(store) or 0
+        )
+
+        store = Store(":memory:")
+        uploads = _make_uploads()
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        calls.clear()  # only care about the second (no-op) run
+
+        second = run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert second.noop is True
+        assert len(calls) == 0
+
+    def test_default_config_notifier_is_a_genuine_no_op_and_does_not_raise(self, tmp_path):
+        """With the REAL notifier (no monkeypatch) and default env (unset), the
+        call site must not raise and RunReport must still be returned normally."""
+        store = Store(":memory:")
+        report = run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert report is not None
+        assert report.noop is False
+
+    def test_notifier_exception_is_swallowed_run_report_still_returned(self, tmp_path, monkeypatch):
+        """A raised exception inside the notifier must never fail the pipeline run."""
+
+        def _boom(store):
+            raise RuntimeError("synthetic notifier failure")
+
+        monkeypatch.setattr(pipeline_module, "send_processed_notification", _boom)
+
+        store = Store(":memory:")
+        report = run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert report is not None
+        assert report.noop is False
+        assert report.new_txns == 5

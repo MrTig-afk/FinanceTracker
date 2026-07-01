@@ -881,3 +881,104 @@ class TestTrendsEndpoint:
         assert '"balance"' not in body_text
         assert '"bank"' not in body_text
         assert '"date"' not in body_text
+
+
+# ---------------------------------------------------------------------------
+# TestPushEndpoints — POST /push/subscribe, POST /push/unsubscribe (v2 Pass 3)
+#
+# All endpoints/keys are SYNTHETIC. These endpoints only ever store/remove a
+# Web Push subscription in the local SQLite store — no off-machine call.
+# ---------------------------------------------------------------------------
+
+
+_SYNTH_SUBSCRIBE_BODY = {
+    "endpoint": "https://example.test/push/SYNTH_APP_TEST_ENDPOINT",
+    "keys": {"p256dh": "synth_p256dh_value", "auth": "synth_auth_value"},
+}
+
+
+class TestPushEndpoints:
+    def test_subscribe_valid_body_200(self, api_client):
+        r = api_client.post("/push/subscribe", json=_SYNTH_SUBSCRIBE_BODY)
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+    def test_subscribe_row_present_in_store(self, api_client, tmp_path):
+        api_client.post("/push/subscribe", json=_SYNTH_SUBSCRIBE_BODY)
+        # No GET /push endpoint exists; verify via a SEPARATE connection to the
+        # same DB file (the app's own connection lives in the server thread —
+        # same technique as TestReclassifyEndpoint._seed).
+        conn = sqlite3.connect(str(tmp_path / "test.sqlite"))
+        row = conn.execute(
+            "SELECT endpoint, p256dh, auth FROM push_subscription"
+        ).fetchone()
+        conn.close()
+        assert row == (
+            _SYNTH_SUBSCRIBE_BODY["endpoint"],
+            _SYNTH_SUBSCRIBE_BODY["keys"]["p256dh"],
+            _SYNTH_SUBSCRIBE_BODY["keys"]["auth"],
+        )
+
+    def test_subscribe_missing_keys_auth_422(self, api_client):
+        bad = {
+            "endpoint": "https://example.test/push/BAD",
+            "keys": {"p256dh": "only_p256dh"},
+        }
+        r = api_client.post("/push/subscribe", json=bad)
+        assert r.status_code == 422
+
+    def test_subscribe_missing_endpoint_422(self, api_client):
+        bad = {"keys": {"p256dh": "x", "auth": "y"}}
+        r = api_client.post("/push/subscribe", json=bad)
+        assert r.status_code == 422
+
+    def test_subscribe_missing_keys_entirely_422(self, api_client):
+        bad = {"endpoint": "https://example.test/push/NOKEYS"}
+        r = api_client.post("/push/subscribe", json=bad)
+        assert r.status_code == 422
+
+    def test_subscribe_empty_body_422(self, api_client):
+        r = api_client.post("/push/subscribe", json={})
+        assert r.status_code == 422
+
+    def test_subscribe_malformed_body_no_stacktrace(self, api_client):
+        r = api_client.post("/push/subscribe", json={"nope": "not valid"})
+        assert r.status_code == 422
+        assert "Traceback" not in r.text
+
+    def test_unsubscribe_stored_endpoint_removed_1(self, api_client):
+        api_client.post("/push/subscribe", json=_SYNTH_SUBSCRIBE_BODY)
+        r = api_client.post(
+            "/push/unsubscribe", json={"endpoint": _SYNTH_SUBSCRIBE_BODY["endpoint"]}
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "removed": 1}
+
+    def test_unsubscribe_again_removed_0(self, api_client):
+        api_client.post("/push/subscribe", json=_SYNTH_SUBSCRIBE_BODY)
+        api_client.post(
+            "/push/unsubscribe", json={"endpoint": _SYNTH_SUBSCRIBE_BODY["endpoint"]}
+        )
+        r = api_client.post(
+            "/push/unsubscribe", json={"endpoint": _SYNTH_SUBSCRIBE_BODY["endpoint"]}
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "removed": 0}
+
+    def test_unsubscribe_unknown_endpoint_never_errors(self, api_client):
+        r = api_client.post(
+            "/push/unsubscribe", json={"endpoint": "https://example.test/push/NEVER_STORED"}
+        )
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "removed": 0}
+
+    def test_unsubscribe_missing_endpoint_422(self, api_client):
+        r = api_client.post("/push/unsubscribe", json={})
+        assert r.status_code == 422
+
+    def test_subscribe_endpoint_value_not_echoed_in_error_body(self, api_client):
+        """A malformed body's endpoint value must not appear verbatim in the 422 detail."""
+        secret_like_endpoint = "https://example.test/push/SHOULD_NOT_BE_ECHOED_TOKEN_998877"
+        bad = {"endpoint": secret_like_endpoint, "keys": {"p256dh": "only_p256dh"}}
+        r = api_client.post("/push/subscribe", json=bad)
+        assert r.status_code == 422

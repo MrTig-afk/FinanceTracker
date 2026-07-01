@@ -8,6 +8,8 @@
  *
  * The routing policy below MUST be kept in sync with src/swRouting.js
  * (which is the unit-tested pure copy). Both are ~10 lines of the same logic.
+ * The push-notification constants/handlers below MUST be kept in sync with
+ * src/swPush.js (v2 Pass 3) — same convention.
  */
 
 'use strict';
@@ -139,4 +141,40 @@ self.addEventListener('fetch', (e) => {
   }
 
   // policy === 'passthrough' — default browser behaviour; no e.respondWith.
+});
+
+// ---------------------------------------------------------------------------
+// Web Push (v2 Pass 3). Independent of routing/caching above.
+// PRIVACY: never render server-sent payload text — show FIXED generic strings only,
+// so no financial data can ever appear in a notification. Mirrors src/swPush.js
+// (kept in sync manually, same convention as routeRequest above).
+// ---------------------------------------------------------------------------
+const PUSH_TITLE = 'FinanceTracker';
+const PUSH_BODY = 'Your statement was processed';
+
+self.addEventListener('push', (event) => {
+  // Deliberately ignore event.data — content is always the fixed generic string.
+  event.waitUntil(
+    self.registration.showNotification(PUSH_TITLE, {
+      body: PUSH_BODY,
+      icon: '/icon.svg',
+      badge: '/icon.svg',
+      tag: 'financetracker-processed',
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientList) => {
+        for (const client of clientList) {
+          if ('focus' in client) return client.focus();
+        }
+        if (self.clients.openWindow) return self.clients.openWindow('/');
+        return undefined;
+      }),
+  );
 });

@@ -11,6 +11,8 @@ GET  /trends    Per-category spending across a window of recent months
                 (?months=1-24, default 6; ?end=YYYY-MM, default latest month).
 GET  /category-context  The 9 canonical categories with stored hints (D1/D2).
 PUT  /category-context  Replace-all of the 9 canonical categories' hints.
+POST /push/subscribe    Store a Web Push subscription locally (v2 Pass 3 scaffold).
+POST /push/unsubscribe  Remove a stored Web Push subscription by endpoint.
 
 Privacy contract
 ----------------
@@ -26,6 +28,10 @@ Privacy contract
   same local-serve posture as /summary. No new off-machine call.
 - GET /trends is another LOCAL, read-only aggregation of the same store — same
   local-serve posture as /summary. No new off-machine call.
+- POST /push/subscribe and /push/unsubscribe store/remove the caller's OWN device
+  Web Push subscription in local SQLite only — no off-machine call here. The scaffold
+  that WOULD later send a push (backend/notifier) is feature-flagged OFF by default
+  (see backend/notifier for the fail-closed gate).
 
 Config (all from .env via python-dotenv — never hardcoded)
 -----------------------------------------------------------
@@ -132,6 +138,25 @@ class CategoryHintsIn(BaseModel):
 
 class CategoryContextIn(BaseModel):
     categories: list[CategoryHintsIn]
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models — push subscription bodies (v2 Pass 3 — inert scaffold)
+# ---------------------------------------------------------------------------
+
+
+class PushKeysIn(BaseModel):
+    p256dh: str = Field(min_length=1, max_length=255)
+    auth: str = Field(min_length=1, max_length=255)
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=1024)
+    keys: PushKeysIn
+
+
+class PushUnsubscribeIn(BaseModel):
+    endpoint: str = Field(min_length=1, max_length=1024)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +423,28 @@ async def put_category_context(body: CategoryContextIn):
     hints_by_name = {c.name: c.hints for c in body.categories}
     app.state.store.save_category_context(hints_by_name)
     return _category_context_response()
+
+
+# ---------------------------------------------------------------------------
+# POST /push/subscribe, POST /push/unsubscribe  (v2 Pass 3 — inert scaffold)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/push/subscribe")
+async def push_subscribe(body: PushSubscriptionIn):
+    """Store the caller's OWN device push subscription locally (no off-machine call).
+
+    Malformed bodies are rejected by Pydantic as 422. Returns {"ok": True}.
+    """
+    app.state.store.upsert_push_subscription(body.model_dump())
+    return {"ok": True}
+
+
+@app.post("/push/unsubscribe")
+async def push_unsubscribe(body: PushUnsubscribeIn):
+    """Remove a stored subscription by endpoint. No-op safe. Returns {"ok": True, "removed": n}."""
+    removed = app.state.store.delete_push_subscription(body.endpoint)
+    return {"ok": True, "removed": removed}
 
 
 # ---------------------------------------------------------------------------

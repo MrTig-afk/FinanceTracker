@@ -364,6 +364,61 @@ class Store:
         return len(rows)
 
     # ------------------------------------------------------------------
+    # Push subscriptions (v2 Pass 3 — inert scaffold; LOCAL-ONLY storage)
+    # ------------------------------------------------------------------
+
+    def upsert_push_subscription(self, sub: dict) -> None:
+        """Insert or update one Web Push subscription (keyed on endpoint).
+
+        sub shape: {"endpoint": str, "keys": {"p256dh": str, "auth": str}}.
+        LOCAL-ONLY storage; never sent off-machine here. Uses INSERT ... ON CONFLICT(endpoint)
+        DO UPDATE SET p256dh/auth so re-subscribing the same browser updates keys, not duplicates.
+        Raises ValueError if required fields are missing (endpoint/keys.p256dh/keys.auth).
+        """
+        endpoint = sub.get("endpoint")
+        keys = sub.get("keys") or {}
+        p256dh = keys.get("p256dh")
+        auth = keys.get("auth")
+        if not endpoint or not p256dh or not auth:
+            raise ValueError("push subscription missing endpoint/keys.p256dh/keys.auth")
+
+        self.conn.execute(
+            """
+            INSERT INTO push_subscription(endpoint, p256dh, auth, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(endpoint) DO UPDATE SET
+                p256dh = excluded.p256dh,
+                auth = excluded.auth
+            """,
+            (endpoint, p256dh, auth, _utc_now_iso()),
+        )
+        self.conn.commit()
+
+    def list_push_subscriptions(self) -> list[dict]:
+        """Return all stored subscriptions as
+        [{"endpoint": str, "keys": {"p256dh": str, "auth": str}}, ...]. [] when empty.
+        """
+        rows = self.conn.execute(
+            "SELECT endpoint, p256dh, auth FROM push_subscription"
+        ).fetchall()
+        return [
+            {
+                "endpoint": row["endpoint"],
+                "keys": {"p256dh": row["p256dh"], "auth": row["auth"]},
+            }
+            for row in rows
+        ]
+
+    def delete_push_subscription(self, endpoint: str) -> int:
+        """Delete by endpoint; returns rowcount (0 if not present). Idempotent no-op safe."""
+        cursor = self.conn.execute(
+            "DELETE FROM push_subscription WHERE endpoint = ?",
+            (endpoint,),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    # ------------------------------------------------------------------
     # Layer 1: file fingerprints (FR-12)
     # ------------------------------------------------------------------
 
