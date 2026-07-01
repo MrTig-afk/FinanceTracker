@@ -60,12 +60,12 @@ describe('index.html — no new webfont dependency introduced', () => {
 // v2 Pass 1 — nav reorder + Monthly/Yearly view sections.
 // ---------------------------------------------------------------------------
 
-describe('index.html — nav order (v2 Pass 1)', () => {
-  it('lists data-view attributes in the exact order: upload, overview, monthly, yearly, context', () => {
+describe('index.html — nav order (v2 Pass 2)', () => {
+  it('lists data-view attributes in the exact order: upload, overview, trends, monthly, yearly, context', () => {
     const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/);
     expect(navMatch).not.toBeNull();
     const dataViews = [...navMatch[0].matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
-    expect(dataViews).toEqual(['upload', 'overview', 'monthly', 'yearly', 'context']);
+    expect(dataViews).toEqual(['upload', 'overview', 'trends', 'monthly', 'yearly', 'context']);
   });
 
   it('keeps Overview as the only nav-item--active entry', () => {
@@ -110,5 +110,42 @@ describe('index.html — Yearly view section', () => {
     expect(html).toContain('id="yearly-totals"');
     expect(html).toContain('id="yearly-compare"');
     expect(html).toContain('id="yearly-compare-label"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v2 Pass 2 — Trends view + Overview mini spend-over-time bar.
+// ---------------------------------------------------------------------------
+
+describe('index.html — Trends view section', () => {
+  it('has a <section data-view="trends" hidden> block', () => {
+    expect(html).toMatch(/<section class="view" data-view="trends" hidden>/);
+  });
+
+  it('contains the trends window select, message banner, and canvas', () => {
+    expect(html).toContain('id="trends-window"');
+    expect(html).toContain('id="trends-message"');
+    expect(html).toContain('id="trends-canvas"');
+  });
+
+  it('the Trends nav link uses the exact label "Trends"', () => {
+    const navMatch = html.match(/<a href="#" class="nav-item" data-view="trends">[\s\S]*?<\/a>/);
+    expect(navMatch).not.toBeNull();
+    expect(navMatch[0]).toContain('Trends');
+  });
+});
+
+describe('index.html — Overview mini spend-over-time bar', () => {
+  it('has an #overview-trend-canvas inside the overview section', () => {
+    expect(html).toContain('id="overview-trend-canvas"');
+    expect(html).toContain('overview-trend-card');
+  });
+
+  it('has an #overview-trend-message banner', () => {
+    expect(html).toContain('id="overview-trend-message"');
+  });
+
+  it('the overview mini card title is the exact spec string', () => {
+    expect(html).toContain('Spending over the last 6 months');
   });
 });

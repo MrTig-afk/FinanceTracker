@@ -30,6 +30,7 @@ from backend.store import (
     init_schema,
     resolve_db_path,
 )
+from backend.store.store import _month_range
 
 # ---------------------------------------------------------------------------
 # Synthetic helpers — invented values; never real data
@@ -1447,3 +1448,250 @@ class TestYearView:
             store.add_new(_result(t1, t2))
             result = store.year_view("2026")
         assert result["available_years"] == ["2026", "2025"]
+
+
+# ---------------------------------------------------------------------------
+# TestMonthRangeHelper — _month_range (v2 Pass 2). Pure, no IO.
+# ---------------------------------------------------------------------------
+
+
+class TestMonthRangeHelper:
+    def test_ascending_order_basic(self) -> None:
+        assert _month_range("2026-06", 4) == ["2026-03", "2026-04", "2026-05", "2026-06"]
+
+    def test_single_month_returns_end_only(self) -> None:
+        assert _month_range("2026-06", 1) == ["2026-06"]
+
+    def test_year_boundary_dec_to_jan(self) -> None:
+        """Dec -> Jan crossing must decrement the year, not wrap within the same year."""
+        assert _month_range("2026-01", 3) == ["2025-11", "2025-12", "2026-01"]
+
+    def test_full_calendar_year_plus_one_wraps_twice(self) -> None:
+        result = _month_range("2026-01", 13)
+        assert result[0] == "2025-01"
+        assert result[-1] == "2026-01"
+        assert len(result) == 13
+        # Strictly ascending, no duplicates
+        assert result == sorted(result)
+        assert len(set(result)) == 13
+
+
+# ---------------------------------------------------------------------------
+# TestCategoryTrend — Store.category_trend (v2 Pass 2). All fixtures are
+# SYNTHETIC, generated inline. No real transactions, no real CSVs.
+# ---------------------------------------------------------------------------
+
+
+class TestCategoryTrend:
+    # -- empty DB --------------------------------------------------------
+
+    def test_empty_db_exact_shape(self) -> None:
+        with Store(":memory:") as store:
+            result = store.category_trend()
+        assert result == {
+            "window": 6,
+            "end_month": None,
+            "months": [],
+            "series": [],
+            "spend_by_month": [],
+            "months_available": 0,
+        }
+
+    def test_empty_db_window_reflects_clamped_months_arg_not_raise(self) -> None:
+        """Failure case: a nonsense months arg against an empty DB returns the
+        defined empty shape (clamped window) rather than raising."""
+        with Store(":memory:") as store:
+            over = store.category_trend(months=100)
+            under = store.category_trend(months=0)
+            negative = store.category_trend(months=-5)
+        assert over["window"] == 24
+        assert over["months"] == []
+        assert under["window"] == 1
+        assert negative["window"] == 1
+
+    # -- happy path --------------------------------------------------------
+
+    def test_happy_path_multi_month_multi_category(self) -> None:
+        """3+ categories across 4 consecutive months; ascending months; gap
+        months zero-filled; every value is str, never float."""
+        txns = [
+            _txn("SYNTH GROC MAR", amount="-20.00", d=date(2026, 3, 5)),
+            _txn("SYNTH GROC APR", amount="-30.00", d=date(2026, 4, 5)),
+            _txn("SYNTH TRANSPORT APR", amount="-10.00", d=date(2026, 4, 6)),
+            _txn("SYNTH SALARY MAY", amount="3000.00", d=date(2026, 5, 5)),
+            _txn("SYNTH GROC JUN", amount="-15.00", d=date(2026, 6, 5)),
+        ]
+        r = _result(*txns)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Groceries",
+                r.fingerprints[1]: "Groceries",
+                r.fingerprints[2]: "Transport",
+                r.fingerprints[3]: "Income",
+                r.fingerprints[4]: "Groceries",
+            })
+            result = store.category_trend(months=4, end_month="2026-06")
+
+        assert result["window"] == 4
+        assert result["end_month"] == "2026-06"
+        assert result["months"] == ["2026-03", "2026-04", "2026-05", "2026-06"]
+        assert result["months"] == sorted(result["months"]), "months must be ascending"
+
+        for s in result["series"]:
+            assert len(s["values"]) == 4
+            for v in s["values"]:
+                assert isinstance(v, str), f"{s['category']} value {v!r} must be str, not float"
+
+        groceries = next(s for s in result["series"] if s["category"] == "Groceries")
+        assert groceries["values"] == ["-20.00", "-30.00", "0.00", "-15.00"]
+
+        transport = next(s for s in result["series"] if s["category"] == "Transport")
+        assert transport["values"] == ["0.00", "-10.00", "0.00", "0.00"]
+
+        income = next(s for s in result["series"] if s["category"] == "Income")
+        assert income["values"] == ["0.00", "0.00", "3000.00", "0.00"]
+
+        assert result["months_available"] == 4
+
+    def test_ordering_taxonomy_then_uncategorised_last(self) -> None:
+        txns = [
+            _txn("SYNTH UNCAT ITEM", amount="-5.00", d=date(2026, 6, 1)),
+            _txn("SYNTH SALARY", amount="1000.00", d=date(2026, 6, 2)),
+            _txn("SYNTH RENT", amount="-800.00", d=date(2026, 6, 3)),
+            _txn("SYNTH GROC", amount="-50.00", d=date(2026, 6, 4)),
+        ]
+        r = _result(*txns)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[1]: "Income",
+                r.fingerprints[2]: "Rent",
+                r.fingerprints[3]: "Groceries",
+                # r.fingerprints[0] left uncategorised (NULL) -> "Uncategorised"
+            })
+            result = store.category_trend(months=1, end_month="2026-06")
+
+        names = [s["category"] for s in result["series"]]
+        # TAXONOMY order = Groceries, Utilities, Rent, ... Income, Other
+        assert names == ["Groceries", "Rent", "Income", "Uncategorised"]
+        assert names.index("Uncategorised") == len(names) - 1
+
+    def test_spend_by_month_excludes_income_and_net_positive_categories(self) -> None:
+        """spend_by_month = donut spend magnitude: excludes Income entirely and
+        excludes any category whose monthly total is net-positive (e.g. a refund)."""
+        txns = [
+            _txn("SYNTH GROC", amount="-100.00", d=date(2026, 6, 1)),
+            _txn("SYNTH TRANSPORT", amount="-30.00", d=date(2026, 6, 2)),
+            _txn("SYNTH SALARY", amount="3000.00", d=date(2026, 6, 3)),
+            _txn("SYNTH REFUND", amount="20.00", d=date(2026, 6, 4)),
+        ]
+        r = _result(*txns)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Groceries",
+                r.fingerprints[1]: "Transport",
+                r.fingerprints[2]: "Income",
+                r.fingerprints[3]: "Entertainment",  # net-positive category this month
+            })
+            result = store.category_trend(months=1, end_month="2026-06")
+
+        assert result["spend_by_month"] == ["130.00"]
+        for v in result["spend_by_month"]:
+            assert isinstance(v, str)
+
+    # -- clamp --------------------------------------------------------------
+
+    def test_clamp_months_over_24(self) -> None:
+        t = _txn("SYNTH ITEM", amount="-10.00", d=date(2026, 6, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t))
+            result = store.category_trend(months=100)
+        assert result["window"] == 24
+        assert len(result["months"]) == 24
+
+    def test_clamp_months_zero_or_negative_to_one(self) -> None:
+        t = _txn("SYNTH ITEM", amount="-10.00", d=date(2026, 6, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t))
+            result_zero = store.category_trend(months=0)
+            result_neg = store.category_trend(months=-5)
+        assert result_zero["window"] == 1
+        assert len(result_zero["months"]) == 1
+        assert result_neg["window"] == 1
+
+    # -- end_month defaulting / earlier-than-all-data ------------------------
+
+    def test_end_month_defaults_to_latest_year_month(self) -> None:
+        t_may = _txn("SYNTH MAY", amount="-10.00", d=date(2026, 5, 1))
+        t_jun = _txn("SYNTH JUN", amount="-20.00", d=date(2026, 6, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t_may, t_jun))
+            result = store.category_trend()
+        assert result["end_month"] == "2026-06"
+
+    def test_end_month_earlier_than_all_data_returns_empty_series(self) -> None:
+        t = _txn("SYNTH JUN", amount="-20.00", d=date(2026, 6, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t))
+            result = store.category_trend(months=3, end_month="2020-01")
+
+        assert result["series"] == []
+        assert result["spend_by_month"] == ["0.00", "0.00", "0.00"]
+        assert result["months"] == ["2019-11", "2019-12", "2020-01"]
+        # months_available is a GLOBAL count, independent of the requested window
+        assert result["months_available"] == 1
+
+    # -- year-boundary window -------------------------------------------------
+
+    def test_year_boundary_window_dec_to_jan(self) -> None:
+        t_nov = _txn("SYNTH NOV", amount="-10.00", d=date(2025, 11, 5))
+        t_dec = _txn("SYNTH DEC", amount="-20.00", d=date(2025, 12, 5))
+        t_jan = _txn("SYNTH JAN", amount="-30.00", d=date(2026, 1, 5))
+        r = _result(t_nov, t_dec, t_jan)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({fp: "Groceries" for fp in r.fingerprints})
+            result = store.category_trend(months=3, end_month="2026-01")
+
+        assert result["months"] == ["2025-11", "2025-12", "2026-01"]
+        groceries = result["series"][0]
+        assert groceries["category"] == "Groceries"
+        assert groceries["values"] == ["-10.00", "-20.00", "-30.00"]
+
+    # -- NULL category accumulation -------------------------------------------
+
+    def test_null_category_rows_accumulate_under_uncategorised(self) -> None:
+        t1 = _txn("SYNTH NULL ONE", amount="-5.00", d=date(2026, 6, 1))
+        t2 = _txn("SYNTH NULL TWO", amount="-7.50", d=date(2026, 6, 2))
+        r = _result(t1, t2)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            # Never call set_categories — both remain category IS NULL.
+            result = store.category_trend(months=1, end_month="2026-06")
+
+        assert len(result["series"]) == 1
+        assert result["series"][0]["category"] == "Uncategorised"
+        assert result["series"][0]["values"] == ["-12.50"]
+
+    # -- money contract: no float leaks anywhere ------------------------------
+
+    def test_no_floats_anywhere_in_result(self) -> None:
+        t = _txn("SYNTH ITEM", amount="-12.34", d=date(2026, 6, 1))
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({r.fingerprints[0]: "Groceries"})
+            result = store.category_trend(months=1, end_month="2026-06")
+
+        def _assert_no_float(obj) -> None:
+            assert not isinstance(obj, float), f"float leaked into category_trend(): {obj!r}"
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    _assert_no_float(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    _assert_no_float(v)
+
+        _assert_no_float(result)

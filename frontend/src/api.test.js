@@ -9,6 +9,7 @@ import {
   fetchSummary,
   fetchMonth,
   fetchYear,
+  fetchTrends,
   fetchStatus,
   postReclassify,
   fetchCategoryContext,
@@ -251,6 +252,79 @@ describe('fetchYear', () => {
   it('rejects with ApiError (not raw TypeError) on network failure', async () => {
     vi.stubGlobal('fetch', makeNetworkFailFetch());
     const err = await fetchYear().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchTrends — v2 Pass 2 category-trend window
+// ---------------------------------------------------------------------------
+
+const CANNED_TRENDS_VIEW = {
+  window: 6,
+  end_month: '2026-06',
+  months: ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
+  series: [{ category: 'Groceries', values: ['-50.00', '-40.00', '-60.00', '-55.00', '-45.00', '-52.00'] }],
+  spend_by_month: ['50.00', '40.00', '60.00', '55.00', '45.00', '52.00'],
+  months_available: 6,
+};
+
+describe('fetchTrends', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_TRENDS_VIEW));
+    const result = await fetchTrends(6, '2026-06');
+    expect(result).toEqual(CANNED_TRENDS_VIEW);
+  });
+
+  it('appends ?months= when months is supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_TRENDS_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchTrends(3);
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/trends?months=3');
+  });
+
+  it('appends both months and end when both are supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_TRENDS_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchTrends(12, '2026-06');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('months=12');
+    expect(calledUrl).toContain('end=2026-06');
+  });
+
+  it('omits the query string entirely when neither arg is supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_TRENDS_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchTrends();
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toMatch(/\/trends$/);
+    expect(calledUrl).not.toContain('?');
+  });
+
+  it('sends an Accept: application/json header', async () => {
+    const mockFetch = makeOkFetch(CANNED_TRENDS_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchTrends();
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(fetchTrends()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError on a 400 (malformed months/end)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await fetchTrends(0).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchTrends().catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
   });
 });

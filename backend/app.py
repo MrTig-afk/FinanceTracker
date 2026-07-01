@@ -7,6 +7,8 @@ GET  /status    Health + last-run summary (no sensitive content).
 GET  /summary   Monthly spending totals (latest or ?month=YYYY-MM).
 GET  /month     Monthly breakdown + month-over-month comparison (latest or ?ym=YYYY-MM).
 GET  /year      Yearly breakdown + year-over-year comparison (latest or ?y=YYYY).
+GET  /trends    Per-category spending across a window of recent months
+                (?months=1-24, default 6; ?end=YYYY-MM, default latest month).
 GET  /category-context  The 9 canonical categories with stored hints (D1/D2).
 PUT  /category-context  Replace-all of the 9 canonical categories' hints.
 
@@ -22,6 +24,8 @@ Privacy contract
   client — this is a local serve, not an off-machine send.
 - GET /month and GET /year are LOCAL, read-only aggregations of the same store —
   same local-serve posture as /summary. No new off-machine call.
+- GET /trends is another LOCAL, read-only aggregation of the same store — same
+  local-serve posture as /summary. No new off-machine call.
 
 Config (all from .env via python-dotenv — never hardcoded)
 -----------------------------------------------------------
@@ -294,6 +298,34 @@ async def year(
         raise HTTPException(status_code=400, detail="y must be YYYY")
 
     return app.state.store.year_view(y)
+
+
+# ---------------------------------------------------------------------------
+# GET /trends  (v2 Pass 2 — category spending across a window of recent months)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/trends")
+async def trends(
+    months: Annotated[int, Query(description="window size in months (1-24)")] = 6,
+    end: Annotated[str | None, Query(description="YYYY-MM window end")] = None,
+):
+    """Return per-category spending across a window of recent months (LOCAL, read-only).
+
+    Query params:
+        months  — optional window size in months. Values > 24 are clamped by the
+                  store (not rejected); values < 1 are rejected (400).
+        end     — optional "YYYY-MM" window end. Omit to end at the latest
+                  populated month.
+
+    Same local-serve posture as /summary. Amounts are str(Decimal), never float.
+    """
+    if months < 1:
+        raise HTTPException(status_code=400, detail="months must be >= 1")
+    if end is not None and not re.match(r"^\d{4}-\d{2}$", end):
+        raise HTTPException(status_code=400, detail="end must be YYYY-MM")
+
+    return app.state.store.category_trend(months=months, end_month=end)
 
 
 # ---------------------------------------------------------------------------

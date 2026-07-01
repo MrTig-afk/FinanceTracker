@@ -749,3 +749,135 @@ class TestPeriodEndpoints:
             assert '"description"' not in body_text
             assert '"balance"' not in body_text
             assert '"bank"' not in body_text
+
+
+# ---------------------------------------------------------------------------
+# TestTrendsEndpoint — GET /trends (v2 Pass 2)
+#
+# Rows are seeded directly into the app's store (same technique as
+# TestPeriodEndpoints) via a SEPARATE sqlite3 connection to the same DB file.
+# All descriptions/amounts are SYNTHETIC.
+# ---------------------------------------------------------------------------
+
+
+class TestTrendsEndpoint:
+    def _seed(self, tmp_path, rows: list[tuple]) -> None:
+        """rows: (fp, date, description, amount, bank, category, year_month)."""
+        conn = sqlite3.connect(str(tmp_path / "test.sqlite"))
+        conn.executemany(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES (?,?,?,?,?,?,?,'t')",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+    # -- default / shape -----------------------------------------------------
+
+    def test_default_200_shape_keys(self, api_client):
+        r = api_client.get("/trends")
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body.keys()) == {
+            "window",
+            "end_month",
+            "months",
+            "series",
+            "spend_by_month",
+            "months_available",
+        }
+
+    def test_default_window_is_6(self, api_client):
+        r = api_client.get("/trends")
+        assert r.status_code == 200
+        assert r.json()["window"] == 6
+
+    def test_empty_db_exact_shape(self, api_client):
+        r = api_client.get("/trends")
+        assert r.status_code == 200
+        assert r.json() == {
+            "window": 6,
+            "end_month": None,
+            "months": [],
+            "series": [],
+            "spend_by_month": [],
+            "months_available": 0,
+        }
+
+    # -- happy path -----------------------------------------------------------
+
+    def test_months_param_shapes_window(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("tf1", "2026-06-01", "SYNTH JUN ITEM", "-30.00", "commbank", "Groceries", "2026-06"),
+        ])
+        r = api_client.get("/trends", params={"months": 3})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["window"] == 3
+        assert len(body["months"]) <= 3
+        assert body["end_month"] == "2026-06"
+
+    def test_end_param_selects_the_window_end(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("tf1", "2026-04-01", "SYNTH APR ITEM", "-10.00", "commbank", "Groceries", "2026-04"),
+            ("tf2", "2026-06-01", "SYNTH JUN ITEM", "-20.00", "commbank", "Groceries", "2026-06"),
+        ])
+        r = api_client.get("/trends", params={"months": 2, "end": "2026-04"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["end_month"] == "2026-04"
+        assert body["months"] == ["2026-03", "2026-04"]
+
+    # -- validation -------------------------------------------------------------
+
+    def test_months_zero_400(self, api_client):
+        r = api_client.get("/trends", params={"months": 0})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "months must be >= 1"
+
+    def test_months_negative_400(self, api_client):
+        r = api_client.get("/trends", params={"months": -1})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "months must be >= 1"
+
+    def test_months_non_integer_422(self, api_client):
+        r = api_client.get("/trends", params={"months": "abc"})
+        assert r.status_code == 422
+
+    def test_end_malformed_400(self, api_client):
+        r = api_client.get("/trends", params={"end": "nonsense"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "end must be YYYY-MM"
+
+    def test_end_slash_format_400(self, api_client):
+        r = api_client.get("/trends", params={"end": "2026/06"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "end must be YYYY-MM"
+
+    def test_months_over_24_clamps_not_rejected(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("tf1", "2026-06-01", "SYNTH JUN ITEM", "-30.00", "commbank", "Groceries", "2026-06"),
+        ])
+        r = api_client.get("/trends", params={"months": 100})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["window"] == 24
+        assert len(body["months"]) == 24
+
+    # -- raw-description-leak guard (BLOCKING) -----------------------------------
+
+    def test_raw_description_leak_guard(self, api_client, tmp_path):
+        unique_token = "ZZSENTINELZZ_TRENDS_LEAK_CANARY_5566778899"
+        self._seed(tmp_path, [
+            ("tf1", "2026-06-01", unique_token, "-30.00", "commbank", "Groceries", "2026-06"),
+            ("tf2", "2026-06-02", "SYNTH OTHER ITEM", "-15.00", "commbank", "Transport", "2026-06"),
+        ])
+        r = api_client.get("/trends")
+        assert r.status_code == 200
+        body_text = r.text
+        assert unique_token not in body_text
+        assert '"description"' not in body_text
+        assert '"balance"' not in body_text
+        assert '"bank"' not in body_text
+        assert '"date"' not in body_text

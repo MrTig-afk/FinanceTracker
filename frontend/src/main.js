@@ -14,6 +14,8 @@ import { initViews } from './views.js';
 import { createCategoryContext } from './categoryContextController.js';
 import { createMonthly } from './monthlyController.js';
 import { createYearly } from './yearlyController.js';
+import { createTrends } from './trendsController.js';
+import { createOverviewTrend } from './overviewTrendController.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -48,6 +50,7 @@ if (import.meta.env.PROD) {
 
 document.addEventListener('DOMContentLoaded', () => {
   const dash = createDashboard(document);
+  const overviewTrend = createOverviewTrend({ root: document });
   const statusDot = document.getElementById('status-dot');
   const refreshBtn = document.getElementById('refresh');
   const fuelToggle = document.getElementById('fuel-rule-toggle');
@@ -80,6 +83,9 @@ document.addEventListener('DOMContentLoaded', () => {
       dash.showError(err);
     }
 
+    // Best-effort mini spend-over-time bar — never blocks or errors the donut.
+    overviewTrend.load().catch(() => {});
+
     // Best-effort status dot — never blocks or errors the page.
     fetchStatus()
       .then((status) => {
@@ -110,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let categoryContext = null;
   let monthly = null;
   let yearly = null;
+  let trends = null;
 
   const views = initViews({
     root: document,
@@ -121,6 +128,9 @@ document.addEventListener('DOMContentLoaded', () => {
           categoryContext = createCategoryContext({ root: document });
         }
         categoryContext.load();
+      } else if (view === 'trends') {
+        if (!trends) trends = createTrends({ root: document });
+        trends.load();
       } else if (view === 'monthly') {
         if (!monthly) monthly = createMonthly({ root: document });
         monthly.load();

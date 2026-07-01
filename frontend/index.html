@@ -35,6 +35,9 @@
           <a href="#" class="nav-item nav-item--active" data-view="overview">
             <span class="nav-dot"></span>Overview
           </a>
+          <a href="#" class="nav-item" data-view="trends">
+            <span class="nav-dot"></span>Trends
+          </a>
           <a href="#" class="nav-item" data-view="monthly">
             <span class="nav-dot"></span>Monthly
           </a>
@@ -142,6 +145,13 @@
               <section class="card balances-card">
                 <h2 class="balances-card-title">Account balances</h2>
                 <div id="balances" class="balances-list"></div>
+              </section>
+
+              <!-- Spend-over-time mini bar (fed by /trends spend_by_month) -->
+              <section class="card overview-trend-card">
+                <h2 class="overview-trend-title">Spending over the last 6 months</h2>
+                <p id="overview-trend-message" class="message-banner" hidden></p>
+                <canvas id="overview-trend-canvas" width="360" height="180"></canvas>
               </section>
             </div>
           </section>
@@ -254,6 +264,20 @@
               <section class="card period-compare-card">
                 <h2 class="compare-title">Change vs <span id="yearly-compare-label"></span></h2>
                 <table class="compare-table"><tbody id="yearly-compare"></tbody></table>
+              </section>
+            </div>
+          </section>
+
+          <!-- Trends view -->
+          <section class="view" data-view="trends" hidden>
+            <div class="period-toolbar">
+              <label class="period-select-label" for="trends-window">Window</label>
+              <select id="trends-window" class="period-select"></select>
+            </div>
+            <p id="trends-message" class="message-banner" hidden></p>
+            <div class="period-grid">
+              <section class="card trends-chart-card">
+                <canvas id="trends-canvas" width="720" height="360"></canvas>
               </section>
             </div>
           </section>

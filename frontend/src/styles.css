@@ -1141,6 +1141,37 @@ a.nav-item {
   color: var(--muted);
 }
 
+/* ── Trends view (v2 Pass 2) ──────────────────────────────── */
+.trends-chart-card {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+}
+
+.trends-chart-card canvas {
+  max-width: 100%;
+}
+
+/* ── Overview mini spend-over-time bar (v2 Pass 2) ───────── */
+.overview-trend-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation-delay: 0.18s;
+}
+
+.overview-trend-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.overview-trend-card canvas {
+  max-width: 100%;
+}
+
 /* ── Small screens: collapse the sidebar to a top bar ────── */
 @media (max-width: 720px) {
   #app {

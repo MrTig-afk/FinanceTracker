@@ -1,8 +1,8 @@
 /**
  * api.js — network layer.
- * Talks to the owner's own backend only (/summary, /month, /year, /status,
- * /reclassify, /category-context). No secrets here. VITE_API_BASE is a
- * non-secret URL (localhost / Tailscale).
+ * Talks to the owner's own backend only (/summary, /month, /year, /trends,
+ * /status, /reclassify, /category-context). No secrets here. VITE_API_BASE is
+ * a non-secret URL (localhost / Tailscale).
  */
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
@@ -79,6 +79,36 @@ export async function fetchYear(y) {
   if (y) {
     url += `?${new URLSearchParams({ y }).toString()}`;
   }
+
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch category trends across a window of recent months from the backend.
+ * @param {number|undefined} months  Optional window size (1-24). Omitted -> backend default (6).
+ * @param {string|undefined} end     Optional 'YYYY-MM' window end. Omitted -> latest month.
+ * @returns {Promise<object>}        Parsed JSON trends object.
+ * @throws {ApiError}                On network failure or non-2xx response.
+ */
+export async function fetchTrends(months, end) {
+  const params = new URLSearchParams();
+  if (months !== undefined && months !== null) params.set('months', String(months));
+  if (end) params.set('end', end);
+
+  let url = `${API_BASE}/trends`;
+  const qs = params.toString();
+  if (qs) url += `?${qs}`;
 
   let res;
   try {

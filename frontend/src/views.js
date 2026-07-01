@@ -21,6 +21,10 @@ const VIEW_COPY = {
       'Add merchant examples and notes per category. This context is prepended to every ' +
       'categorisation request so the model sorts your transactions the way you would.',
   },
+  trends: {
+    title: 'Trends',
+    subtitle: 'How each category has moved across recent months.',
+  },
   monthly: {
     title: 'Monthly',
     subtitle: 'One month’s breakdown, and how each category moved vs the previous month.',

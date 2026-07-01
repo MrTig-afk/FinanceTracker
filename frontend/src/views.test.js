@@ -14,6 +14,7 @@ const SHELL_HTML = `
   <nav>
     <a href="#" class="nav-item" data-view="upload">Upload</a>
     <a href="#" class="nav-item nav-item--active" data-view="overview">Overview</a>
+    <a href="#" class="nav-item" data-view="trends">Trends</a>
     <a href="#" class="nav-item" data-view="monthly">Monthly</a>
     <a href="#" class="nav-item" data-view="yearly">Yearly</a>
     <a href="#" class="nav-item" data-view="context">Category context</a>
@@ -37,6 +38,9 @@ const SHELL_HTML = `
         <div id="dropzone-westpac"></div>
         <button id="upload-submit" type="button">Upload</button>
       </section>
+    </section>
+    <section class="view" data-view="trends" hidden>
+      <select id="trends-window"></select>
     </section>
     <section class="view" data-view="monthly" hidden>
       <select id="monthly-select"></select>
@@ -94,6 +98,11 @@ describe('initViews default state', () => {
     expect(sectionFor('yearly').hidden).toBe(true);
   });
 
+  it('hides the trends view by default', () => {
+    controller = initViews({ root: document });
+    expect(sectionFor('trends').hidden).toBe(true);
+  });
+
   it('marks the overview nav item active by default', () => {
     controller = initViews({ root: document });
     expect(navFor('overview').classList.contains('nav-item--active')).toBe(true);
@@ -145,11 +154,48 @@ describe('clicking a nav item', () => {
 // ---------------------------------------------------------------------------
 
 describe('nav order', () => {
-  it('lists nav items in the exact order Upload, Overview, Monthly, Yearly, Category context', () => {
+  it('lists nav items in the exact order Upload, Overview, Trends, Monthly, Yearly, Category context', () => {
     const items = Array.from(document.querySelectorAll('nav > *')).map(
       (el) => el.dataset.view ?? el.textContent.trim(),
     );
-    expect(items).toEqual(['upload', 'overview', 'monthly', 'yearly', 'context', 'History', 'Settings']);
+    expect(items).toEqual([
+      'upload', 'overview', 'trends', 'monthly', 'yearly', 'context', 'History', 'Settings',
+    ]);
+  });
+});
+
+describe('switching to the trends view', () => {
+  it('shows trends and hides overview/upload/monthly/yearly/context', () => {
+    controller = initViews({ root: document });
+    navFor('trends').click();
+
+    expect(sectionFor('trends').hidden).toBe(false);
+    expect(sectionFor('overview').hidden).toBe(true);
+    expect(sectionFor('upload').hidden).toBe(true);
+    expect(sectionFor('monthly').hidden).toBe(true);
+    expect(sectionFor('yearly').hidden).toBe(true);
+    expect(sectionFor('context').hidden).toBe(true);
+  });
+
+  it('sets the h1 heading to "Trends"', () => {
+    controller = initViews({ root: document });
+    navFor('trends').click();
+    expect(document.querySelector('.site-header h1').textContent).toBe('Trends');
+  });
+
+  it('marks the trends nav item active', () => {
+    controller = initViews({ root: document });
+    navFor('trends').click();
+    expect(navFor('trends').classList.contains('nav-item--active')).toBe(true);
+    expect(navFor('overview').classList.contains('nav-item--active')).toBe(false);
+  });
+
+  it('calls onShow with "trends"', () => {
+    const onShow = vi.fn();
+    controller = initViews({ root: document, onShow });
+    onShow.mockClear();
+    navFor('trends').click();
+    expect(onShow).toHaveBeenCalledWith('trends');
   });
 });
 

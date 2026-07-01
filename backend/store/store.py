@@ -31,7 +31,7 @@ from backend.idempotency import NewTxnResult, transaction_fingerprint
 from .category_context import CategoryContext, DEFAULT_CONTEXT
 from .fuel_rule import is_fuel_convenience
 from .schema import init_schema as _schema_init
-from .taxonomy import coerce_category
+from .taxonomy import TAXONOMY, coerce_category
 
 # Categories involved in the small-fuel-stop reclassification rule.
 _FUEL_RULE_FROM = "Transport"
@@ -196,6 +196,32 @@ def resolve_db_path(override: str | os.PathLike | None = None) -> str:
         return str(override)
     load_dotenv()  # no-op if already loaded; safe to call multiple times
     return os.getenv("SQLITE_PATH", "./data/financetracker.sqlite")
+
+
+# ---------------------------------------------------------------------------
+# Month-window helper (v2 Pass 2 — Trends). Pure, no IO.
+# ---------------------------------------------------------------------------
+
+def _month_range(end_ym: str, n: int) -> list[str]:
+    """Return n consecutive 'YYYY-MM' keys ending at end_ym, ASCENDING (oldest first).
+
+    Pure, no IO. end_ym is 'YYYY-MM'; n >= 1. Walks calendar months backward from
+    end_ym (inclusive) n-1 times, then reverses to ascending order. Correctly
+    decrements the year when a window crosses a Dec -> Jan boundary.
+    """
+    year = int(end_ym[:4])
+    month = int(end_ym[5:7])
+
+    months: list[str] = []
+    for _ in range(n):
+        months.append(f"{year:04d}-{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+
+    months.reverse()
+    return months
 
 
 # ---------------------------------------------------------------------------
@@ -822,11 +848,12 @@ class Store:
         ]
 
     # ------------------------------------------------------------------
-    # Period views (v2 Pass 1): Monthly / Yearly + period-over-period
-    # comparison. Read-only aggregation over the existing schema — no new
-    # tables, no write-path change. Money contract copies summary() exactly:
-    # Decimal accumulation in Python, str(Decimal) out, NULL category ->
-    # "Uncategorised", defined empty shape when there is no data.
+    # Period views (v2 Pass 1: Monthly / Yearly + period-over-period
+    # comparison; v2 Pass 2: category_trend). Read-only aggregation over
+    # the existing schema — no new tables, no write-path change. Money
+    # contract copies summary() exactly: Decimal accumulation in Python,
+    # str(Decimal) out, NULL category -> "Uncategorised", defined empty
+    # shape when there is no data.
     # ------------------------------------------------------------------
 
     def available_months(self) -> list[str]:
@@ -976,4 +1003,90 @@ class Store:
             "count": count,
             "comparison": self._compare(totals, prev_totals),
             "available_years": years,
+        }
+
+    def category_trend(self, months: int = 6, end_month: str | None = None) -> dict:
+        """Per-category spending across a window of consecutive calendar months.
+
+        Read-only aggregation over the existing transactions table (LOCAL-ONLY,
+        never sent off-machine). Money contract copies summary() exactly: Decimal
+        accumulation in Python, str(Decimal) out, NULL category -> "Uncategorised".
+
+        Args:
+            months:    window size; CLAMPED to [1, 24] (values outside are clamped,
+                       not rejected — the endpoint owns the 400 for non-positive input).
+            end_month: 'YYYY-MM' the window ends at (inclusive); defaults to
+                       latest_year_month(). Empty DB -> the defined empty shape.
+
+        Behaviour:
+          - window = _month_range(end_month, clamped_months), ASCENDING.
+          - Query: SELECT year_month, category, amount FROM transactions
+                   WHERE year_month BETWEEN window[0] AND window[-1].
+          - Accumulate totals[category][ym] as Decimal; NULL category -> "Uncategorised".
+          - Category order = [c for c in TAXONOMY if present] + (["Uncategorised"] if present).
+          - series[i].values has one str(Decimal) per month in window; gaps -> "0.00".
+          - spend_by_month[i] = str(Decimal) POSITIVE magnitude of that month's donut
+            spend = sum( -total ) over categories where total < 0 AND category != "Income".
+          - months_available = len(available_months()) so the client can show an
+            insufficient-history empty state.
+        """
+        clamped = max(1, min(24, months))
+
+        if end_month is None:
+            end_month = self.latest_year_month()
+
+        if end_month is None:
+            return {
+                "window": clamped,
+                "end_month": None,
+                "months": [],
+                "series": [],
+                "spend_by_month": [],
+                "months_available": 0,
+            }
+
+        window = _month_range(end_month, clamped)
+
+        rows = self.conn.execute(
+            "SELECT year_month, category, amount FROM transactions "
+            "WHERE year_month BETWEEN ? AND ?",
+            (window[0], window[-1]),
+        ).fetchall()
+
+        totals: dict[str, dict[str, Decimal]] = {}
+        for row in rows:
+            cat = row["category"] if row["category"] is not None else "Uncategorised"
+            ym = row["year_month"]
+            amt = amount_from_text(row["amount"])
+            month_totals = totals.setdefault(cat, {})
+            month_totals[ym] = month_totals.get(ym, Decimal("0.00")) + amt
+
+        ordered_categories = [c for c in TAXONOMY if c in totals]
+        if "Uncategorised" in totals:
+            ordered_categories.append("Uncategorised")
+
+        series = [
+            {
+                "category": cat,
+                "values": [str(totals[cat].get(ym, Decimal("0.00"))) for ym in window],
+            }
+            for cat in ordered_categories
+        ]
+
+        spend_by_month = [Decimal("0.00") for _ in window]
+        for cat in ordered_categories:
+            if cat == "Income":
+                continue
+            for i, ym in enumerate(window):
+                v = totals[cat].get(ym, Decimal("0.00"))
+                if v < 0:
+                    spend_by_month[i] += -v
+
+        return {
+            "window": clamped,
+            "end_month": end_month,
+            "months": window,
+            "series": series,
+            "spend_by_month": [str(v) for v in spend_by_month],
+            "months_available": len(self.available_months()),
         }
