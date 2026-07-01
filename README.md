@@ -1,6 +1,6 @@
 # FinanceTracker
 
-A private, self-hosted personal finance tracker. It turns monthly Commonwealth Bank and Westpac CSV exports into a categorised spending breakdown, viewable on a desktop dashboard and an installable phone PWA.
+A private, self-hosted personal finance tracker. It turns monthly Commonwealth Bank and Westpac CSV exports into a categorised spending breakdown, shown on a desktop dashboard and an installable phone PWA with a sidebar, a light and dark theme, and an animated donut.
 
 You run it on your own machine, with your own API keys. Nothing here is a hosted service: this repo is the scaffolding. You bring the keys and the data, and all of the data stays on your hardware.
 
@@ -56,7 +56,7 @@ backend/
   drive_uploader/  Google Drive service-account upload
   app.py           FastAPI endpoints (/upload, /status, /summary)
   pipeline.py      orchestration
-frontend/          Vite PWA: upload UI, queue-and-retry, donut chart, totals
+frontend/          Vite PWA: sidebar shell, light/dark theming, animated donut, upload UI, queue-and-retry
 service/           Windows Task Scheduler auto-start scripts
 ```
 
@@ -90,6 +90,15 @@ npm run dev
 
 Open the dashboard, upload your CommBank and Westpac CSVs, and the backend parses, sanitises, categorises, stores, and returns a breakdown. Re-running on unchanged files is a no-op (no categorisation call, no changed output).
 
+## Dashboard
+
+The interface is an app shell with a sidebar and a light and dark theme toggle (your choice is remembered). The Overview screen shows:
+
+- An animated donut of spending by category, with the month's total counting up in the centre and a legend whose bars fill in per category.
+- A "small servo spends" toggle. Fuel and convenience stops (BP, 7-Eleven, Ampol, Shell, Caltex, Coles Express, Reddy Express) under $10 are usually a coffee or a snack, not fuel, so one switch reclassifies those from Transport to Dining Out for the month. Anything over $10 stays Transport, and travel-only fares (Opal, Myki, SkyBus) are never touched. The change is saved locally and is fully reversible.
+
+The phone PWA is the same view over Tailscale, with client-side queue-and-retry, so an upload made while the laptop is asleep is held and retried until it lands.
+
 ## Configuration
 
 All backend config lives in `.env` (gitignored). Copy `.env.example` and fill it in. The important values:
@@ -115,7 +124,7 @@ Both banks normalise to one internal shape: `date`, `description`, `amount` (sig
 - CommBank (NetBank desktop export): no header row, columns are `date, amount (signed), description, balance`.
 - Westpac: header row present, the leading account-number column is dropped, and split debit/credit columns are merged into one signed amount.
 
-Format knowledge lives in per-bank profiles, so a wrong assumption is a one-place fix.
+Format knowledge lives in per-bank profiles, so a wrong assumption is a one-place fix. You do not have to match a file to the right upload box either: the app detects which bank a CSV is from by its contents, so a file dropped in the wrong slot still parses correctly, and a file that matches neither format is rejected with a clear message instead of failing silently.
 
 ## Categories
 
@@ -139,7 +148,7 @@ Tests use synthetic data generated in code, never real transactions. The suite m
 
 ## Scope and roadmap
 
-This is v1: the core upload to breakdown loop. Later versions (not built yet) add a yearly and month-over-month history view, category trend charts, phone push notifications, budget alerts, and manual category overrides fed back as few-shot examples.
+This is v1: the core upload to breakdown loop, plus the redesigned dashboard, the small-fuel-stop reclassification toggle, and content-based bank detection. Planned next is a "category context" screen where you keep per-category merchant hints that get prepended to the categorisation prompt. Later versions add a yearly and month-over-month history view, category trend charts, phone push notifications, and budget alerts.
 
 ## License
 
