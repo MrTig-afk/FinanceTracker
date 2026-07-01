@@ -349,8 +349,7 @@ export function createDashboard(root = document) {
             backgroundColor: data.colors,
             borderColor: _currentSurfaceColor(),
             borderWidth: 3,
-            hoverOffset: 18,
-            hoverBorderWidth: 4,
+            hoverOffset: 12,
           },
         ],
       },
@@ -358,6 +357,11 @@ export function createDashboard(root = document) {
         cutout: '70%',
         responsive: false,
         maintainAspectRatio: false,
+        // Explicit hard margin on top of Chart.js's own hoverOffset-aware
+        // radius reservation, so the popped-out hovered arc always has
+        // guaranteed clearance and can never be clipped by the canvas edge
+        // (fixed-size, non-responsive canvas — see #donut-canvas in index.html).
+        layout: { padding: 10 },
         animation: {
           animateRotate: true,
           animateScale: true,
