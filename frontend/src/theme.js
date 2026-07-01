@@ -12,15 +12,16 @@ export const ACCENT = '#3d9a6f';
 /** Theme token sets, keyed by theme name. Values are oklch() strings. */
 export const THEME_TOKENS = {
   light: {
-    bg: 'oklch(0.985 0.006 95)',
-    surface: 'oklch(1 0 0)',
-    surface2: 'oklch(0.975 0.006 95)',
-    border: 'oklch(0.915 0.006 95)',
-    text: 'oklch(0.30 0.02 90)',
-    muted: 'oklch(0.56 0.016 90)',
-    sidebar: 'oklch(0.972 0.006 95)',
-    inputbg: 'oklch(0.978 0.006 95)',
+    bg: 'oklch(0.955 0.012 95)',
+    surface: 'oklch(0.995 0.003 95)',
+    surface2: 'oklch(0.975 0.008 95)',
+    border: 'oklch(0.86 0.012 95)',
+    text: 'oklch(0.24 0.02 90)',
+    muted: 'oklch(0.50 0.018 90)',
+    sidebar: 'oklch(0.945 0.014 95)',
+    inputbg: 'oklch(0.975 0.006 95)',
     dotFill: 'transparent',
+    cardShadow: '0 1px 3px oklch(0.2 0.02 90 / 0.10), 0 8px 24px oklch(0.2 0.02 90 / 0.06)',
   },
   dark: {
     bg: 'oklch(0.205 0.014 260)',
@@ -32,6 +33,7 @@ export const THEME_TOKENS = {
     sidebar: 'oklch(0.22 0.014 260)',
     inputbg: 'oklch(0.28 0.017 260)',
     dotFill: 'oklch(0.95 0.008 260)',
+    cardShadow: 'none',
   },
 };
 
@@ -77,13 +79,20 @@ export function nextTheme(theme) {
 
 /**
  * Write the theme's CSS custom properties onto `root`, and update the
- * #theme-toggle button's label/dot if present.
+ * #theme-toggle button (Corona Bloom sun/moon switch) if present.
+ *
+ * The toggle's sun/moon knob, track colour and glow are pure CSS driven off
+ * the button's `aria-checked` attribute (see .corona-toggle rules in
+ * styles.css) — this is the single source of truth for its visual state,
+ * kept in sync with the app theme here rather than tracked separately.
+ *
  * @param {'light'|'dark'} theme
  * @param {HTMLElement} root  Usually document.documentElement.
  */
 export function applyTheme(theme, root = document.documentElement) {
   const tokens = THEME_TOKENS[theme] ?? THEME_TOKENS.light;
   const doc = root.ownerDocument ?? document;
+  const isDark = theme === 'dark';
 
   root.style.setProperty('--bg', tokens.bg);
   root.style.setProperty('--surface', tokens.surface);
@@ -93,13 +102,17 @@ export function applyTheme(theme, root = document.documentElement) {
   root.style.setProperty('--muted', tokens.muted);
   root.style.setProperty('--sidebar', tokens.sidebar);
   root.style.setProperty('--inputbg', tokens.inputbg);
+  root.style.setProperty('--card-shadow', tokens.cardShadow);
   root.style.setProperty('--accent', ACCENT);
 
   const label = doc.getElementById ? doc.getElementById('theme-label') : null;
-  if (label) label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+  if (label) label.textContent = isDark ? 'Dark' : 'Light';
 
-  const dot = doc.getElementById ? doc.getElementById('theme-dot') : null;
-  if (dot) dot.style.backgroundColor = tokens.dotFill;
+  const toggle = doc.getElementById ? doc.getElementById('theme-toggle') : null;
+  if (toggle) {
+    toggle.setAttribute('aria-checked', String(isDark));
+    toggle.setAttribute('aria-label', isDark ? 'Switch to light theme' : 'Switch to dark theme');
+  }
 }
 
 /**

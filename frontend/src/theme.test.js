@@ -16,7 +16,7 @@ import {
 
 const REQUIRED_KEYS = [
   'bg', 'surface', 'surface2', 'border', 'text', 'muted',
-  'sidebar', 'inputbg', 'dotFill',
+  'sidebar', 'inputbg', 'dotFill', 'cardShadow',
 ];
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ describe('applyTheme', () => {
   beforeEach(() => {
     document.body.innerHTML = `
       <span id="theme-label"></span>
-      <span id="theme-dot"></span>
+      <button id="theme-toggle" role="switch" aria-checked="false"></button>
     `;
     document.documentElement.removeAttribute('style');
   });
@@ -133,6 +133,20 @@ describe('applyTheme', () => {
     );
   });
 
+  it('sets --card-shadow to the light token value', () => {
+    applyTheme('light', document.documentElement);
+    expect(document.documentElement.style.getPropertyValue('--card-shadow')).toBe(
+      THEME_TOKENS.light.cardShadow,
+    );
+  });
+
+  it('sets --card-shadow to "none" for the dark theme', () => {
+    applyTheme('dark', document.documentElement);
+    expect(document.documentElement.style.getPropertyValue('--card-shadow')).toBe(
+      THEME_TOKENS.dark.cardShadow,
+    );
+  });
+
   it('updates #theme-label to "Dark" for the dark theme', () => {
     applyTheme('dark', document.documentElement);
     expect(document.getElementById('theme-label').textContent).toBe('Dark');
@@ -143,12 +157,29 @@ describe('applyTheme', () => {
     expect(document.getElementById('theme-label').textContent).toBe('Light');
   });
 
-  it('updates #theme-dot background to the token dotFill', () => {
+  it('sets #theme-toggle aria-checked to "true" for the dark theme', () => {
     applyTheme('dark', document.documentElement);
-    expect(document.getElementById('theme-dot').style.backgroundColor).toBeTruthy();
+    expect(document.getElementById('theme-toggle').getAttribute('aria-checked')).toBe('true');
   });
 
-  it('does not throw when #theme-label/#theme-dot are absent', () => {
+  it('sets #theme-toggle aria-checked to "false" for the light theme', () => {
+    applyTheme('light', document.documentElement);
+    expect(document.getElementById('theme-toggle').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('sets an accessible aria-label describing the action on #theme-toggle', () => {
+    applyTheme('light', document.documentElement);
+    expect(document.getElementById('theme-toggle').getAttribute('aria-label')).toBe(
+      'Switch to dark theme',
+    );
+
+    applyTheme('dark', document.documentElement);
+    expect(document.getElementById('theme-toggle').getAttribute('aria-label')).toBe(
+      'Switch to light theme',
+    );
+  });
+
+  it('does not throw when #theme-label/#theme-toggle are absent', () => {
     document.body.innerHTML = '';
     expect(() => applyTheme('dark', document.documentElement)).not.toThrow();
   });
@@ -161,7 +192,15 @@ describe('applyTheme', () => {
 describe('initTheme', () => {
   beforeEach(() => {
     document.body.innerHTML = `
-      <button id="theme-toggle"><span id="theme-dot"></span><span id="theme-label"></span></button>
+      <div class="theme-toggle-wrap">
+        <button id="theme-toggle" type="button" class="corona-toggle" role="switch" aria-checked="false" aria-label="Switch to dark theme">
+          <span class="corona-toggle-knob" aria-hidden="true">
+            <span class="corona-toggle-face corona-toggle-face--sun"></span>
+            <span class="corona-toggle-face corona-toggle-face--moon"></span>
+          </span>
+        </button>
+        <span id="theme-label" class="theme-toggle-label">Light</span>
+      </div>
     `;
     document.documentElement.removeAttribute('style');
     localStorage.clear();
@@ -173,6 +212,17 @@ describe('initTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe(THEME_TOKENS.dark.bg);
   });
 
+  it('renders the Corona Bloom toggle with its accessible name and reflects state on init', () => {
+    localStorage.setItem(STORAGE_KEY, 'dark');
+    initTheme({ root: document });
+
+    const toggle = document.getElementById('theme-toggle');
+    expect(toggle.getAttribute('role')).toBe('switch');
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(toggle.getAttribute('aria-label')).toBe('Switch to light theme');
+    expect(toggle.querySelector('.corona-toggle-knob')).toBeTruthy();
+  });
+
   it('clicking #theme-toggle flips the stored theme and calls onChange', () => {
     const onChange = vi.fn();
     initTheme({ root: document, onChange });
@@ -182,6 +232,7 @@ describe('initTheme', () => {
     expect(onChange).toHaveBeenCalledWith('dark');
     expect(localStorage.getItem(STORAGE_KEY)).toBe('dark');
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe(THEME_TOKENS.dark.bg);
+    expect(document.getElementById('theme-toggle').getAttribute('aria-checked')).toBe('true');
   });
 
   it('a second click toggles back to light', () => {
