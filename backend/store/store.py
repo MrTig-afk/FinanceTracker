@@ -27,8 +27,15 @@ from dotenv import load_dotenv
 
 from backend.idempotency import NewTxnResult
 
+from .fuel_rule import is_fuel_convenience
 from .schema import init_schema as _schema_init
 from .taxonomy import coerce_category
+
+# Categories involved in the small-fuel-stop reclassification rule.
+_FUEL_RULE_FROM = "Transport"
+_FUEL_RULE_TO = "Dining Out"
+# Strictly-under-$10 debit: -10.00 < amount < 0 (a spend smaller than ten dollars).
+_FUEL_RULE_FLOOR = Decimal("-10.00")
 
 # ---------------------------------------------------------------------------
 # Decimal <-> TEXT helpers
@@ -355,6 +362,85 @@ class Store:
         return updated
 
     # ------------------------------------------------------------------
+    # Small-fuel-stop reclassification (view rule, reversible via marker)
+    # ------------------------------------------------------------------
+
+    def apply_fuel_dining_rule(self, year_month: str | None = None) -> int:
+        """Move small fuel-stop spends from Transport to 'Dining Out' for one month.
+
+        A row is moved when ALL hold:
+          - it is currently categorised 'Transport';
+          - its merchant is a fuel/convenience chain (is_fuel_convenience);
+          - it is a debit strictly smaller than $10 (-10.00 < amount < 0).
+
+        Moved rows are stamped reclassified_by_rule = 1 so revert_fuel_dining_rule()
+        can restore exactly these and never touch a genuine 'Dining Out' row.
+
+        Idempotent: a second call finds nothing still in 'Transport' to move.
+        Defaults to latest_year_month(). Returns the number of rows moved.
+        """
+        if year_month is None:
+            year_month = self.latest_year_month()
+        if year_month is None:
+            return 0
+
+        rows = self.conn.execute(
+            "SELECT id, description, amount FROM transactions "
+            "WHERE year_month = ? AND category = ?",
+            (year_month, _FUEL_RULE_FROM),
+        ).fetchall()
+
+        move_ids = [
+            row["id"]
+            for row in rows
+            if is_fuel_convenience(row["description"])
+            and _FUEL_RULE_FLOOR < amount_from_text(row["amount"]) < Decimal("0")
+        ]
+        if not move_ids:
+            return 0
+
+        self.conn.executemany(
+            "UPDATE transactions SET category = ?, reclassified_by_rule = 1 WHERE id = ?",
+            [(_FUEL_RULE_TO, i) for i in move_ids],
+        )
+        self.conn.commit()
+        return len(move_ids)
+
+    def revert_fuel_dining_rule(self, year_month: str | None = None) -> int:
+        """Undo apply_fuel_dining_rule() for one month.
+
+        Restores every row marked reclassified_by_rule = 1 back to 'Transport' and
+        clears the marker. Rows the user or LLM genuinely put in 'Dining Out' are
+        untouched (their marker is 0). Defaults to latest_year_month().
+        Returns the number of rows restored.
+        """
+        if year_month is None:
+            year_month = self.latest_year_month()
+        if year_month is None:
+            return 0
+
+        cursor = self.conn.execute(
+            "UPDATE transactions SET category = ?, reclassified_by_rule = 0 "
+            "WHERE year_month = ? AND reclassified_by_rule = 1",
+            (_FUEL_RULE_FROM, year_month),
+        )
+        self.conn.commit()
+        return cursor.rowcount
+
+    def fuel_rule_applied(self, year_month: str | None = None) -> bool:
+        """True if any row in the month is currently reclassified by the fuel rule."""
+        if year_month is None:
+            year_month = self.latest_year_month()
+        if year_month is None:
+            return False
+        row = self.conn.execute(
+            "SELECT 1 FROM transactions "
+            "WHERE year_month = ? AND reclassified_by_rule = 1 LIMIT 1",
+            (year_month,),
+        ).fetchone()
+        return row is not None
+
+    # ------------------------------------------------------------------
     # Reporting (dashboard / Excel builder)
     # ------------------------------------------------------------------
 
@@ -389,6 +475,7 @@ class Store:
                 "totals": {"Groceries": "-123.45", ...},  # only categories present
                 "net": "-50.00",
                 "count": 12,
+                "fuel_rule_applied": false,  # small-fuel-stop rule active this month?
             }
         """
         if year_month is None:
@@ -401,6 +488,7 @@ class Store:
                 "totals": {},
                 "net": "0.00",
                 "count": 0,
+                "fuel_rule_applied": False,
             }
 
         rows = self.conn.execute(
@@ -422,6 +510,7 @@ class Store:
             "totals": {k: str(v) for k, v in totals.items()},
             "net": str(net),
             "count": len(rows),
+            "fuel_rule_applied": self.fuel_rule_applied(year_month),
         }
 
     def transactions_for_month(self, year_month: str | None = None) -> list[MonthRow]:

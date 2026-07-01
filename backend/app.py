@@ -230,6 +230,37 @@ async def summary(
 
 
 # ---------------------------------------------------------------------------
+# POST /reclassify  (small-fuel-stop dining rule; local-only category edit)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/reclassify")
+async def reclassify(
+    enabled: Annotated[bool, Query(description="true = apply rule, false = revert")],
+    month: Annotated[str | None, Query(description="YYYY-MM")] = None,
+):
+    """Apply or revert the small-fuel-stop 'Dining Out' rule for a month.
+
+    When enabled=true, Transport rows at fuel/convenience merchants (BP, 7-Eleven,
+    etc.) under $10 are moved to 'Dining Out' and marked so the move is reversible.
+    When enabled=false, previously-moved rows are restored to 'Transport'.
+
+    This edits the owner's own local SQLite only — no off-machine call. Returns the
+    updated summary so the dashboard can re-render.
+    """
+    if month is not None and not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+
+    store = app.state.store
+    if enabled:
+        store.apply_fuel_dining_rule(month)
+    else:
+        store.revert_fuel_dining_rule(month)
+
+    return store.summary(month)
+
+
+# ---------------------------------------------------------------------------
 # Entrypoint (used by service/run-backend.ps1 and direct `python backend/app.py`)
 # ---------------------------------------------------------------------------
 

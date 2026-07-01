@@ -28,6 +28,7 @@ export function createDashboard(root = document) {
   const canvas = root.getElementById('chart');
   const tbody = root.getElementById('totals-body');
   const messageEl = root.getElementById('message');
+  const fuelToggleEl = root.getElementById('fuel-rule-toggle');
 
   /** @type {Chart|null} */
   let chartInstance = null;
@@ -66,6 +67,11 @@ export function createDashboard(root = document) {
     // Month label
     if (monthLabelEl) {
       monthLabelEl.textContent = monthLabel(summary.year_month);
+    }
+
+    // Reflect whether the small-fuel-stop rule is currently applied this month.
+    if (fuelToggleEl) {
+      fuelToggleEl.checked = Boolean(summary.fuel_rule_applied);
     }
 
     // Net value — colour-coded by sign

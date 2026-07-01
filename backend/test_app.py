@@ -8,6 +8,7 @@ Drive unconfigured. DB in tmp_path sqlite.
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -447,3 +448,53 @@ class TestPrivacyAsserts:
         # Confirm raw CSV from a normal upload isn't in a 400 error body
         assert _CB_TEXT not in r.text
         assert _WP_TEXT not in r.text
+
+
+# ---------------------------------------------------------------------------
+# TestReclassifyEndpoint — small-fuel-stop dining rule (POST /reclassify)
+# ---------------------------------------------------------------------------
+
+class TestReclassifyEndpoint:
+    """POST /reclassify applies/reverts the fuel-stop rule and returns the summary.
+
+    Rows are seeded directly into the app's store with SYNTHETIC merchants so the
+    test controls categories precisely (the fake analyser assigns everything to one
+    category and would not produce Transport rows).
+    """
+
+    def _seed(self, tmp_path):
+        # Seed via a SEPARATE connection to the same DB file: the app's own
+        # connection lives in the server thread and can't be touched from here.
+        conn = sqlite3.connect(str(tmp_path / "test.sqlite"))
+        conn.execute(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES"
+            " ('f1','2026-06-15','BP CONNECT','-7.00','commbank','Transport','2026-06','t'),"
+            " ('f2','2026-06-16','OPAL TRAVEL','-3.00','commbank','Transport','2026-06','t')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_apply_moves_and_returns_summary(self, api_client, tmp_path):
+        self._seed(tmp_path)
+        r = api_client.post("/reclassify", params={"enabled": "true", "month": "2026-06"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["fuel_rule_applied"] is True
+        # BP under $10 -> Dining Out; OPAL (transit) stays Transport.
+        assert body["totals"]["Dining Out"] == "-7.00"
+        assert body["totals"]["Transport"] == "-3.00"
+
+    def test_revert_restores(self, api_client, tmp_path):
+        self._seed(tmp_path)
+        api_client.post("/reclassify", params={"enabled": "true", "month": "2026-06"})
+        r = api_client.post("/reclassify", params={"enabled": "false", "month": "2026-06"})
+        body = r.json()
+        assert body["fuel_rule_applied"] is False
+        assert body["totals"]["Transport"] == "-10.00"
+        assert "Dining Out" not in body["totals"]
+
+    def test_bad_month_400(self, api_client):
+        r = api_client.post("/reclassify", params={"enabled": "true", "month": "2026/06"})
+        assert r.status_code == 400

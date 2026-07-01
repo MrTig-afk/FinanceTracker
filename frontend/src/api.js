@@ -42,6 +42,36 @@ export async function fetchSummary(month) {
 }
 
 /**
+ * Apply or revert the small-fuel-stop 'Dining Out' rule for a month.
+ * Edits the owner's own local backend only; returns the updated summary.
+ * @param {boolean} enabled       true = apply the rule, false = revert it.
+ * @param {string|undefined} month Optional 'YYYY-MM'. Omitted → latest month.
+ * @returns {Promise<object>}      Updated summary object.
+ * @throws {ApiError}              On network failure or non-2xx response.
+ */
+export async function postReclassify(enabled, month) {
+  const params = new URLSearchParams({ enabled: String(Boolean(enabled)) });
+  if (month) params.set('month', month);
+  const url = `${API_BASE}/reclassify?${params.toString()}`;
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
  * Fetch backend status (best-effort — returns null on any failure).
  * Never throws; caller can safely ignore the return value.
  * @returns {Promise<object|null>}

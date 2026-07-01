@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { fetchSummary, fetchStatus, ApiError } from './api.js';
+import { fetchSummary, fetchStatus, postReclassify, ApiError } from './api.js';
 
 // ---------------------------------------------------------------------------
 // Synthetic canned response — no real amounts, no real categories.
@@ -113,6 +113,49 @@ describe('fetchSummary', () => {
     const err = await fetchSummary().catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// postReclassify — apply/revert the small-fuel-stop rule
+// ---------------------------------------------------------------------------
+
+describe('postReclassify', () => {
+  it('resolves to the updated summary JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch());
+    const result = await postReclassify(true, '2026-06');
+    expect(result).toEqual(CANNED_SUMMARY);
+  });
+
+  it('POSTs to /reclassify with enabled and month query params', async () => {
+    const mockFetch = makeOkFetch();
+    vi.stubGlobal('fetch', mockFetch);
+    await postReclassify(true, '2026-06');
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/reclassify?');
+    expect(url).toContain('enabled=true');
+    expect(url).toContain('month=2026-06');
+    expect(options.method).toBe('POST');
+  });
+
+  it('serialises enabled=false and omits month when not supplied', async () => {
+    const mockFetch = makeOkFetch();
+    vi.stubGlobal('fetch', mockFetch);
+    await postReclassify(false);
+    const url = mockFetch.mock.calls[0][0];
+    expect(url).toContain('enabled=false');
+    expect(url).not.toContain('month=');
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(postReclassify(true)).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await postReclassify(true).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
   });
 });
 

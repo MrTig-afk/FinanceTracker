@@ -428,6 +428,7 @@ class TestSummaryCorrectness:
             "totals": {},
             "net": "0.00",
             "count": 0,
+            "fuel_rule_applied": False,
         }
 
     def test_summary_mixed_income_and_expense(self) -> None:

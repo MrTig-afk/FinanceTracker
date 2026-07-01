@@ -9,15 +9,16 @@ import sqlite3
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS transactions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    txn_fingerprint TEXT NOT NULL UNIQUE,
-    date            TEXT NOT NULL,
-    description     TEXT NOT NULL,
-    amount          TEXT NOT NULL,
-    bank            TEXT NOT NULL,
-    category        TEXT,
-    year_month      TEXT NOT NULL,
-    created_at      TEXT NOT NULL
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    txn_fingerprint      TEXT NOT NULL UNIQUE,
+    date                 TEXT NOT NULL,
+    description          TEXT NOT NULL,
+    amount               TEXT NOT NULL,
+    bank                 TEXT NOT NULL,
+    category             TEXT,
+    year_month           TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    reclassified_by_rule INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_txn_date       ON transactions(date);
@@ -31,10 +32,26 @@ CREATE TABLE IF NOT EXISTS file_fingerprints (
 """
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring a pre-existing database up to the current schema.
+
+    SQLite has no 'ADD COLUMN IF NOT EXISTS', so we inspect the table and add any
+    missing column. Idempotent: a no-op on a database already at the current schema.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(transactions)")}
+    if "reclassified_by_rule" not in cols:
+        conn.execute(
+            "ALTER TABLE transactions "
+            "ADD COLUMN reclassified_by_rule INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     """Execute all DDL statements against conn; safe to call repeatedly (idempotent bootstrap).
 
     Uses CREATE TABLE IF NOT EXISTS and CREATE INDEX IF NOT EXISTS so it can be called on
-    an existing database without error. The caller owns the connection lifecycle.
+    an existing database without error, then runs additive migrations for databases
+    created by an earlier schema version. The caller owns the connection lifecycle.
     """
     conn.executescript(_DDL)
+    _migrate(conn)

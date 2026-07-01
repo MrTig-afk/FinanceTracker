@@ -4,7 +4,7 @@
  * No secrets here. No transaction data.
  */
 
-import { fetchSummary, fetchStatus } from './api.js';
+import { fetchSummary, fetchStatus, postReclassify } from './api.js';
 import { createDashboard } from './dashboard.js';
 import { createQueue } from './queue.js';
 import { createUploadController } from './uploadController.js';
@@ -27,24 +27,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const dash = createDashboard(document);
   const statusDot = document.getElementById('status-dot');
   const refreshBtn = document.getElementById('refresh');
+  const fuelToggle = document.getElementById('fuel-rule-toggle');
+
+  // Render a summary object, choosing the empty state when there is no data.
+  function renderSummary(summary) {
+    const isEmpty =
+      summary.count === 0 ||
+      !summary.totals ||
+      Object.keys(summary.totals).length === 0;
+
+    if (isEmpty) {
+      dash.showEmpty();
+    } else {
+      dash.render(summary);
+    }
+  }
 
   // -------------------------------------------------------------------------
   // Dashboard load — reused as the post-upload refresh callback (onUploaded).
   // -------------------------------------------------------------------------
   async function load() {
     try {
-      const summary = await fetchSummary();
-
-      const isEmpty =
-        summary.count === 0 ||
-        !summary.totals ||
-        Object.keys(summary.totals).length === 0;
-
-      if (isEmpty) {
-        dash.showEmpty();
-      } else {
-        dash.render(summary);
-      }
+      renderSummary(await fetchSummary());
     } catch (err) {
       dash.showError(err);
     }
@@ -81,6 +85,21 @@ document.addEventListener('DOMContentLoaded', () => {
   // -------------------------------------------------------------------------
   if (refreshBtn) {
     refreshBtn.addEventListener('click', () => load());
+  }
+
+  // -------------------------------------------------------------------------
+  // Small-fuel-stop rule toggle — apply/revert on the backend, then re-render.
+  // On failure, resync the checkbox to the backend's actual state via load().
+  // -------------------------------------------------------------------------
+  if (fuelToggle) {
+    fuelToggle.addEventListener('change', async () => {
+      try {
+        renderSummary(await postReclassify(fuelToggle.checked));
+      } catch (err) {
+        dash.showError(err);
+        load();
+      }
+    });
   }
 
   load();

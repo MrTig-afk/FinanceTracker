@@ -45,6 +45,7 @@ const DOM_HTML = `
   <span id="status-dot"></span>
   <div id="message" hidden></div>
   <button id="refresh"></button>
+  <input id="fuel-rule-toggle" type="checkbox" />
 `;
 
 // ---------------------------------------------------------------------------
@@ -257,6 +258,29 @@ describe('double render', () => {
     dash.render(SYNTHETIC_SUMMARY);
     dash.render(SYNTHETIC_SUMMARY);
     expect(Chart).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fuel-rule toggle — reflects summary.fuel_rule_applied
+// ---------------------------------------------------------------------------
+
+describe('fuel-rule toggle state', () => {
+  it('checks the toggle when fuel_rule_applied is true', () => {
+    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: true });
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(true);
+  });
+
+  it('unchecks the toggle when fuel_rule_applied is false', () => {
+    document.getElementById('fuel-rule-toggle').checked = true;
+    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: false });
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
+  });
+
+  it('unchecks the toggle when fuel_rule_applied is absent', () => {
+    document.getElementById('fuel-rule-toggle').checked = true;
+    dash.render(SYNTHETIC_SUMMARY);
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
   });
 });
 

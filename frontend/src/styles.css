@@ -124,6 +124,27 @@ body {
   margin-bottom: 1.25rem;
 }
 
+/* ── Small-fuel-stop rule toggle ─────────────────────────── */
+.fuel-rule-control {
+  margin-bottom: 1.25rem;
+}
+
+.fuel-rule-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: #37474f;
+  cursor: pointer;
+}
+
+.fuel-rule-label input {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
 /* ── Dashboard: chart + totals ───────────────────────────── */
 .dashboard {
   display: flex;
