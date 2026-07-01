@@ -259,6 +259,111 @@ describe('chart tooltip + legend cross-highlight', () => {
     firstRow.dispatchEvent(new Event('mouseleave'));
     expect(instance.setActiveElements).toHaveBeenCalledWith([]);
   });
+
+  // -------------------------------------------------------------------------
+  // Change 1 — bidirectional symmetry (previously legend->arc did not add
+  // .is-hover to the row itself; onHover->legend did). Both directions must
+  // now produce the identical (arc lifted, row .is-hover) pair.
+  // -------------------------------------------------------------------------
+
+  it('legend mouseenter adds .is-hover to THAT SAME row (previously missing)', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const rows = document.querySelectorAll('#legend .legend-row');
+
+    rows[0].dispatchEvent(new Event('mouseenter'));
+    expect(rows[0].classList.contains('is-hover')).toBe(true);
+    expect(rows[1].classList.contains('is-hover')).toBe(false);
+  });
+
+  it('legend mouseleave removes .is-hover from the row', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const rows = document.querySelectorAll('#legend .legend-row');
+
+    rows[0].dispatchEvent(new Event('mouseenter'));
+    expect(rows[0].classList.contains('is-hover')).toBe(true);
+
+    rows[0].dispatchEvent(new Event('mouseleave'));
+    expect(rows[0].classList.contains('is-hover')).toBe(false);
+  });
+
+  it('hovering a non-zero-index legend row lifts the matching arc index', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const instance = Chart.mock.results[0].value;
+    const rows = document.querySelectorAll('#legend .legend-row');
+
+    rows[1].dispatchEvent(new Event('mouseenter'));
+    expect(instance.setActiveElements).toHaveBeenCalledWith([{ datasetIndex: 0, index: 1 }]);
+    expect(rows[1].classList.contains('is-hover')).toBe(true);
+    expect(rows[0].classList.contains('is-hover')).toBe(false);
+  });
+
+  it('arc onHover([{index:1}]) highlights legend row 1 (arc->legend direction)', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const config = Chart.mock.calls[0][1];
+    const rows = document.querySelectorAll('#legend .legend-row');
+
+    config.options.onHover({}, [{ index: 1 }]);
+    expect(rows[1].classList.contains('is-hover')).toBe(true);
+    expect(rows[0].classList.contains('is-hover')).toBe(false);
+  });
+
+  it('leaving the canvas (onHover with empty elements) clears the legend highlight', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const config = Chart.mock.calls[0][1];
+    const instance = Chart.mock.results[0].value;
+    const rows = document.querySelectorAll('#legend .legend-row');
+
+    config.options.onHover({}, [{ index: 0 }]);
+    expect(rows[0].classList.contains('is-hover')).toBe(true);
+
+    config.options.onHover({}, []);
+    rows.forEach((row) => expect(row.classList.contains('is-hover')).toBe(false));
+    expect(instance.setActiveElements).toHaveBeenLastCalledWith([]);
+  });
+
+  it('the idx===hoveredIndex guard skips a redundant chart.update() on repeat mouseenter', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const instance = Chart.mock.results[0].value;
+    const firstRow = document.querySelector('#legend .legend-row');
+
+    firstRow.dispatchEvent(new Event('mouseenter'));
+    expect(instance.update).toHaveBeenCalledTimes(1);
+
+    // Re-entering the SAME row (already hoveredIndex 0) must not call update again.
+    firstRow.dispatchEvent(new Event('mouseenter'));
+    expect(instance.update).toHaveBeenCalledTimes(1);
+    expect(instance.setActiveElements).toHaveBeenCalledTimes(1);
+  });
+
+  it('the guard also applies to onHover with the same arc index repeated', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const config = Chart.mock.calls[0][1];
+    const instance = Chart.mock.results[0].value;
+
+    config.options.onHover({}, [{ index: 0 }]);
+    expect(instance.update).toHaveBeenCalledTimes(1);
+
+    config.options.onHover({}, [{ index: 0 }]);
+    expect(instance.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('hoveredIndex resets on re-render so hovering index 0 again still updates', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const firstRowGen1 = document.querySelector('#legend .legend-row');
+    firstRowGen1.dispatchEvent(new Event('mouseenter'));
+
+    // Re-render — a fresh Chart instance + fresh legend rows + hoveredIndex reset to null.
+    dash.render(SYNTHETIC_SUMMARY);
+    const secondInstance = Chart.mock.results[1].value;
+    const firstRowGen2 = document.querySelector('#legend .legend-row');
+
+    firstRowGen2.dispatchEvent(new Event('mouseenter'));
+    expect(secondInstance.setActiveElements).toHaveBeenCalledWith([
+      { datasetIndex: 0, index: 0 },
+    ]);
+    expect(secondInstance.update).toHaveBeenCalledTimes(1);
+    expect(firstRowGen2.classList.contains('is-hover')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

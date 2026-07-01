@@ -96,10 +96,40 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // -------------------------------------------------------------------------
+  // View switching — Overview / Upload / Category context / (History, Settings
+  // stay inert). Lazy-create the category-context controller on first switch;
+  // re-run the dashboard load() whenever Overview is shown. initViews() shows
+  // the default (Overview) view synchronously, which fires onShow('overview')
+  // and triggers the initial load() below — no separate call needed.
+  // Created before the upload controller so the latter can trigger a view
+  // switch after a successful upload (see onUploadSuccess below).
+  // -------------------------------------------------------------------------
+  let categoryContext = null;
+
+  const views = initViews({
+    root: document,
+    onShow(view) {
+      if (view === 'overview') {
+        load();
+      } else if (view === 'context') {
+        if (!categoryContext) {
+          categoryContext = createCategoryContext({ root: document });
+        }
+        categoryContext.load();
+      }
+    },
+  });
+
+  // -------------------------------------------------------------------------
   // Upload queue (FR-4) — IndexedDB-backed with memory fallback.
   // -------------------------------------------------------------------------
   const queue = createQueue(); // default: createIdbStore() with memory fallback
-  createUploadController({ root: document, queue, onUploaded: load });
+  createUploadController({
+    root: document,
+    queue,
+    onUploaded: load,
+    onUploadSuccess: () => views.show('overview'),
+  });
   queue.start();
 
   // Drain anything queued from a previous offline session.
@@ -126,27 +156,4 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
-  // -------------------------------------------------------------------------
-  // View switching — Overview / Upload / Category context / (History, Settings
-  // stay inert). Lazy-create the category-context controller on first switch;
-  // re-run the dashboard load() whenever Overview is shown. initViews() shows
-  // the default (Overview) view synchronously, which fires onShow('overview')
-  // and triggers the initial load() below — no separate call needed.
-  // -------------------------------------------------------------------------
-  let categoryContext = null;
-
-  initViews({
-    root: document,
-    onShow(view) {
-      if (view === 'overview') {
-        load();
-      } else if (view === 'context') {
-        if (!categoryContext) {
-          categoryContext = createCategoryContext({ root: document });
-        }
-        categoryContext.load();
-      }
-    },
-  });
 });

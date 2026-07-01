@@ -9,10 +9,10 @@
   "theme_color": "#3f51b5",
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "/finance-tracker-app-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ]
 }

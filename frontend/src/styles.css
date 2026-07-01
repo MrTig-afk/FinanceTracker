@@ -162,21 +162,11 @@ button {
   padding: 0 6px;
 }
 
-.brand-dot {
+.brand-mark {
   width: 26px;
   height: 26px;
-  border-radius: 50%;
   flex: none;
-  background: conic-gradient(
-    #57b26f 0 15%,
-    #4a90d9 0 32%,
-    #9b6cd4 0 47%,
-    #e0913f 0 63%,
-    #34a7a3 0 78%,
-    #d96ba6 0 100%
-  );
-  -webkit-mask: radial-gradient(circle 6px at center, transparent 98%, #000 100%);
-  mask: radial-gradient(circle 6px at center, transparent 98%, #000 100%);
+  display: block;
 }
 
 .brand-name {
@@ -184,6 +174,10 @@ button {
   font-size: 15px;
   letter-spacing: -0.02em;
   color: var(--text);
+}
+
+.brand-word--accent {
+  color: var(--accent);
 }
 
 .sidebar-nav {
@@ -553,14 +547,20 @@ a.nav-item {
   border-radius: 7px;
   margin: 0 -7px;
   padding: 2px 7px;
+  border-left: 3px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
 }
 
 .legend-row.pulse-hi .legend-row-top {
   animation: ftPulseHi 0.9s ease;
 }
 
+/* Hover emphasis: stronger tint + a coloured accent edge + a slight nudge so
+ * the highlighted row is unmistakable at a glance, not just a faint wash. */
 .legend-row.is-hover .legend-row-top {
   background-color: var(--hl);
+  border-left-color: var(--hl-ring, var(--accent));
+  transform: translateX(3px);
 }
 
 .legend-dot {
@@ -569,6 +569,12 @@ a.nav-item {
   border-radius: 3px;
   flex: none;
   box-shadow: 0 0 0 3px var(--hl, transparent);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.legend-row.is-hover .legend-dot {
+  box-shadow: 0 0 0 5px var(--hl-ring, var(--hl));
+  transform: scale(1.15);
 }
 
 .legend-name {

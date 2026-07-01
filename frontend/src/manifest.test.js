@@ -78,3 +78,52 @@ describe('manifest.webmanifest', () => {
     expect(manifest.theme_color).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Change 2 — icon repointed to the new app-icon SVG (was /icon.svg).
+// ---------------------------------------------------------------------------
+
+describe('manifest icon — repointed to finance-tracker-app-icon.svg', () => {
+  it('the icon entry src is /finance-tracker-app-icon.svg', () => {
+    expect(manifest.icons[0].src).toBe('/finance-tracker-app-icon.svg');
+  });
+
+  it('purpose is "any" (app-icon has no maskable safe zone)', () => {
+    expect(manifest.icons[0].purpose).toBe('any');
+  });
+
+  it('sizes is "any" and type is image/svg+xml (unchanged fields)', () => {
+    expect(manifest.icons[0].sizes).toBe('any');
+    expect(manifest.icons[0].type).toBe('image/svg+xml');
+  });
+
+  it('name/short_name/start_url/scope/display/background_color/theme_color are untouched', () => {
+    expect(manifest.name).toBe('FinanceTracker');
+    expect(manifest.short_name).toBeTruthy();
+    expect(manifest.start_url).toBeTruthy();
+    expect(manifest.scope).toBeTruthy();
+    expect(manifest.display).toBe('standalone');
+    expect(manifest.background_color).toBeTruthy();
+    expect(manifest.theme_color).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The copied brand-asset SVGs exist on disk in frontend/public/.
+// ---------------------------------------------------------------------------
+
+describe('brand-asset SVGs on disk', () => {
+  it('finance-tracker-app-icon.svg exists and is non-empty', () => {
+    const path = resolve(__dirname, '../public/finance-tracker-app-icon.svg');
+    const contents = readFileSync(path, 'utf8');
+    expect(contents.length).toBeGreaterThan(0);
+    expect(contents).toContain('<svg');
+  });
+
+  it('finance-tracker-mark.svg exists and is non-empty', () => {
+    const path = resolve(__dirname, '../public/finance-tracker-mark.svg');
+    const contents = readFileSync(path, 'utf8');
+    expect(contents.length).toBeGreaterThan(0);
+    expect(contents).toContain('<svg');
+  });
+});

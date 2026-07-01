@@ -16,6 +16,11 @@ import { ApiError } from './api.js';
 
 const SYNTH_CSV = 'date,amount,desc\n01-06-2026,-5.00,SYNTH\n';
 
+// Mirrors uploadController.js's AUTO_SWITCH_DELAY_MS (spec: ~1.5s after a
+// successful upload). Kept as a literal here so the test asserts the
+// documented behaviour rather than importing an internal, unexported constant.
+const AUTO_SWITCH_WAIT = 1500;
+
 function csvFile(name = 'commbank.csv') {
   return new File([SYNTH_CSV], name, { type: 'text/csv' });
 }
@@ -25,20 +30,22 @@ function csvFile(name = 'commbank.csv') {
 // ---------------------------------------------------------------------------
 
 const UPLOAD_HTML = `
-  <div id="dropzone-commbank" class="dropzone" tabindex="0" role="button">
-    <span class="dropzone-hint">Drop CSV here</span>
-    <span id="filename-commbank" class="filename"></span>
-  </div>
-  <input id="file-commbank" type="file" accept=".csv" />
+  <section class="view" data-view="upload">
+    <div id="dropzone-commbank" class="dropzone" tabindex="0" role="button">
+      <span class="dropzone-hint">Drop CSV here</span>
+      <span id="filename-commbank" class="filename"></span>
+    </div>
+    <input id="file-commbank" type="file" accept=".csv" />
 
-  <div id="dropzone-westpac" class="dropzone" tabindex="0" role="button">
-    <span class="dropzone-hint">Drop CSV here</span>
-    <span id="filename-westpac" class="filename"></span>
-  </div>
-  <input id="file-westpac" type="file" accept=".csv" />
+    <div id="dropzone-westpac" class="dropzone" tabindex="0" role="button">
+      <span class="dropzone-hint">Drop CSV here</span>
+      <span id="filename-westpac" class="filename"></span>
+    </div>
+    <input id="file-westpac" type="file" accept=".csv" />
 
-  <button id="upload-submit" type="button">Upload</button>
-  <p id="upload-status" role="status" aria-live="polite"></p>
+    <button id="upload-submit" type="button">Upload</button>
+    <p id="upload-status" role="status" aria-live="polite"></p>
+  </section>
 `;
 
 // ---------------------------------------------------------------------------
@@ -273,6 +280,133 @@ describe('submit — server ApiError (4xx/5xx, backend reachable)', () => {
     await new Promise((r) => setTimeout(r, 20));
 
     expect(getStatus()).toContain('422');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Change 3 — auto-jump to Overview ~1.5s after a successful upload.
+// Uses fake timers. postFn/onUploaded resolve/reject via real Promises
+// (fake timers do not affect microtask scheduling), so we flush pending
+// microtasks with vi.advanceTimersByTimeAsync(0) before asserting.
+// ---------------------------------------------------------------------------
+
+describe('onUploadSuccess — auto-switch after AUTO_SWITCH_DELAY_MS', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('calls onUploadSuccess exactly once, ~1500ms after a successful upload', async () => {
+    const postFn = vi.fn().mockResolvedValue({ processed: 1 });
+    const onUploadSuccess = vi.fn();
+    controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await vi.advanceTimersByTimeAsync(0); // flush the postFn microtask chain
+
+    expect(onUploadSuccess).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1499);
+    expect(onUploadSuccess).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onUploadSuccess).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT call onUploadSuccess when postFn rejects with a server ApiError', async () => {
+    const serverErr = new ApiError('upload failed', { status: 500, cause: null });
+    const postFn = vi.fn().mockRejectedValue(serverErr);
+    const onUploadSuccess = vi.fn();
+    controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(AUTO_SWITCH_WAIT);
+
+    expect(onUploadSuccess).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call onUploadSuccess when the upload is queued (network ApiError)', async () => {
+    const networkErr = new ApiError('network error', {
+      status: null,
+      cause: new TypeError('Failed to fetch'),
+    });
+    const postFn = vi.fn().mockRejectedValue(networkErr);
+    const onUploadSuccess = vi.fn();
+    controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(AUTO_SWITCH_WAIT);
+
+    expect(onUploadSuccess).not.toHaveBeenCalled();
+  });
+
+  it('guard: does not call onUploadSuccess if the user navigated away (upload section hidden)', async () => {
+    const postFn = vi.fn().mockResolvedValue({});
+    const onUploadSuccess = vi.fn();
+    controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // User manually switches away from the Upload view before the timer fires.
+    document.querySelector('section.view[data-view="upload"]').hidden = true;
+
+    await vi.advanceTimersByTimeAsync(AUTO_SWITCH_WAIT);
+    expect(onUploadSuccess).not.toHaveBeenCalled();
+  });
+
+  it('calls onUploadSuccess when the upload section is present and NOT hidden', async () => {
+    const postFn = vi.fn().mockResolvedValue({});
+    const onUploadSuccess = vi.fn();
+    controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
+
+    // Confirm the fixture's guard element resolves and starts visible.
+    expect(document.querySelector('section.view[data-view="upload"]').hidden).toBe(false);
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(AUTO_SWITCH_WAIT);
+
+    expect(onUploadSuccess).toHaveBeenCalledOnce();
+  });
+
+  it('destroy() before the delay elapses clears the timer — callback never fires', async () => {
+    const postFn = vi.fn().mockResolvedValue({});
+    const onUploadSuccess = vi.fn();
+    controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+
+    controller.destroy();
+    controller = null; // already destroyed, skip afterEach destroy
+
+    await vi.advanceTimersByTimeAsync(AUTO_SWITCH_WAIT);
+    expect(onUploadSuccess).not.toHaveBeenCalled();
+  });
+
+  it('does not schedule any timer at all on the error path (no leaked pending timers)', async () => {
+    const serverErr = new ApiError('upload failed', { status: 500, cause: null });
+    const postFn = vi.fn().mockRejectedValue(serverErr);
+    const onUploadSuccess = vi.fn();
+    controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
