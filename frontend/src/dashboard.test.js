@@ -14,7 +14,11 @@ import { ApiError } from './api.js';
 // ---------------------------------------------------------------------------
 
 vi.mock('chart.js', () => {
-  const Chart = vi.fn().mockImplementation(() => ({ destroy: vi.fn() }));
+  // Use a normal function (not an arrow) so it can be called with `new`:
+  // Vitest 4 no longer lets an arrow-function mock implementation be constructed.
+  const Chart = vi.fn(function () {
+    return { destroy: vi.fn() };
+  });
   Chart.register = vi.fn();
   return {
     Chart,
