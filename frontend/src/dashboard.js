@@ -4,8 +4,8 @@
  * No IO, no network at module level.
  */
 
-import { Chart, DoughnutController, ArcElement, Tooltip, Legend } from 'chart.js';
-Chart.register(DoughnutController, ArcElement, Tooltip, Legend);
+import { Chart, DoughnutController, ArcElement, Legend } from 'chart.js';
+Chart.register(DoughnutController, ArcElement, Legend);
 
 import {
   toChartData,
@@ -141,6 +141,14 @@ export function createDashboard(root = document) {
   // Legend
   // -------------------------------------------------------------------------
 
+  function _highlightLegendFromArc(index) {
+    if (!legendEl) return;
+    const rows = legendEl.querySelectorAll('.legend-row');
+    rows.forEach((row, i) => {
+      row.classList.toggle('is-hover', index !== null && i === index);
+    });
+  }
+
   function _renderLegend(data, total) {
     _clearLegend();
     if (!legendEl) return;
@@ -157,6 +165,17 @@ export function createDashboard(root = document) {
       rowEl.style.setProperty('--hl', `color-mix(in srgb, ${color} 20%, transparent)`);
       rowEl.style.animationDelay = `${i * 55}ms`;
       rowEl.dataset.category = label;
+
+      rowEl.addEventListener('mouseenter', () => {
+        if (!chartInstance) return;
+        chartInstance.setActiveElements([{ datasetIndex: 0, index: i }]);
+        chartInstance.update();
+      });
+      rowEl.addEventListener('mouseleave', () => {
+        if (!chartInstance) return;
+        chartInstance.setActiveElements([]);
+        chartInstance.update();
+      });
 
       const top = document.createElement('div');
       top.className = 'legend-row-top';
@@ -291,13 +310,10 @@ export function createDashboard(root = document) {
         },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label(context) {
-                return ` ${context.label}: ${formatCurrency(context.raw)}`;
-              },
-            },
-          },
+          tooltip: { enabled: false },
+        },
+        onHover(event, elements) {
+          _highlightLegendFromArc(elements && elements.length ? elements[0].index : null);
         },
       },
     });

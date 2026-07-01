@@ -24,6 +24,7 @@ vi.mock('chart.js', () => {
     return {
       destroy: vi.fn(),
       update: vi.fn(),
+      setActiveElements: vi.fn(),
       data: { datasets: [{ borderColor: null }] },
     };
   });
@@ -209,6 +210,44 @@ describe('render with summary data', () => {
       (el) => el.textContent,
     );
     expect(names).toEqual(['Groceries', 'Transport']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Chart tooltip disabled + donut/legend cross-highlight
+// ---------------------------------------------------------------------------
+
+describe('chart tooltip + legend cross-highlight', () => {
+  it('disables the built-in Chart.js tooltip', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const config = Chart.mock.calls[0][1];
+    expect(config.options.plugins.tooltip.enabled).toBe(false);
+  });
+
+  it('onHover highlights the matching legend row and clears on no-hover', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const config = Chart.mock.calls[0][1];
+    const rows = document.querySelectorAll('#legend .legend-row');
+
+    config.options.onHover({}, [{ index: 0 }]);
+    expect(rows[0].classList.contains('is-hover')).toBe(true);
+    expect(rows[1].classList.contains('is-hover')).toBe(false);
+
+    config.options.onHover({}, []);
+    rows.forEach((row) => expect(row.classList.contains('is-hover')).toBe(false));
+  });
+
+  it('legend mouseenter/mouseleave sets and clears active chart elements', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const instance = Chart.mock.results[0].value;
+    const firstRow = document.querySelector('#legend .legend-row');
+
+    firstRow.dispatchEvent(new Event('mouseenter'));
+    expect(instance.setActiveElements).toHaveBeenCalledWith([{ datasetIndex: 0, index: 0 }]);
+    expect(instance.update).toHaveBeenCalled();
+
+    firstRow.dispatchEvent(new Event('mouseleave'));
+    expect(instance.setActiveElements).toHaveBeenCalledWith([]);
   });
 });
 

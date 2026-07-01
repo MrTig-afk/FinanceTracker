@@ -296,9 +296,8 @@ a.nav-item {
   cursor: default;
 }
 
-/* ── Refresh / theme buttons ─────────────────────────────── */
-.refresh-btn,
-.theme-toggle {
+/* ── Refresh button ───────────────────────────────────────── */
+.refresh-btn {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -315,19 +314,104 @@ a.nav-item {
 }
 
 .refresh-btn:hover,
-.refresh-btn:focus-visible,
-.theme-toggle:hover,
-.theme-toggle:focus-visible {
+.refresh-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-.theme-dot {
-  width: 13px;
-  height: 13px;
+/* Refresh is only useful on the narrow/phone layout — the queue + on-open
+   load covers the desktop case. Inverse of the max-width:720px breakpoint
+   below, so it needs its own min-width query. */
+@media (min-width: 721px) {
+  #refresh {
+    display: none;
+  }
+}
+
+/* ── Corona Bloom theme toggle ────────────────────────────────
+   Ported from a standalone design mockup (sun/moon pill switch with a
+   glowing "corona" halo around the knob). Visual state is driven entirely
+   by the button's aria-checked attribute, which applyTheme() sets — no
+   separate animation state store. */
+.theme-toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.theme-toggle-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.corona-toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  overflow: hidden;
+  background: linear-gradient(135deg, #ffd98a, #ffb347);
+  transition: background 0.55s ease;
+}
+
+.corona-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.corona-toggle[aria-checked='true'] {
+  background: linear-gradient(135deg, #1d2338, #0e1220);
+}
+
+.corona-toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  border: 2px solid var(--accent);
-  box-sizing: border-box;
+  transform: translateX(0);
+  transition: transform 0.6s cubic-bezier(0.65, 0, 0.35, 1), box-shadow 0.6s ease;
+  box-shadow: 0 0 0 1px rgba(255, 220, 150, 0.5), 0 0 10px 2px rgba(247, 194, 75, 0.5);
+}
+
+.corona-toggle[aria-checked='true'] .corona-toggle-knob {
+  transform: translateX(20px);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.9),
+    0 0 12px 4px rgba(190, 205, 255, 0.75),
+    0 0 25px 9px rgba(140, 160, 255, 0.45);
+}
+
+.corona-toggle-face {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  transition: opacity 0.5s ease;
+}
+
+.corona-toggle-face--sun {
+  background: radial-gradient(circle at 35% 30%, #fff6d8, #f7c24b);
+  opacity: 1;
+}
+
+.corona-toggle-face--moon {
+  background: radial-gradient(circle at 60% 40%, #3a4260, #1a2036);
+  opacity: 0;
+}
+
+.corona-toggle[aria-checked='true'] .corona-toggle-face--sun {
+  opacity: 0;
+}
+
+.corona-toggle[aria-checked='true'] .corona-toggle-face--moon {
+  opacity: 1;
 }
 
 /* ── Main content ────────────────────────────────────────── */
@@ -365,7 +449,8 @@ a.nav-item {
   padding: 24px;
   opacity: 0;
   animation: ftCardIn 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+  box-shadow: var(--card-shadow, none);
+  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .fuel-card {
@@ -472,6 +557,10 @@ a.nav-item {
 
 .legend-row.pulse-hi .legend-row-top {
   animation: ftPulseHi 0.9s ease;
+}
+
+.legend-row.is-hover .legend-row-top {
+  background-color: var(--hl);
 }
 
 .legend-dot {

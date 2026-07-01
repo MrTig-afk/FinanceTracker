@@ -57,10 +57,15 @@
           <div class="header-controls">
             <span id="status-dot" class="status-dot" title="Backend status unknown"></span>
             <button id="refresh" type="button" class="refresh-btn">Refresh</button>
-            <button id="theme-toggle" type="button" class="theme-toggle">
-              <span id="theme-dot" class="theme-dot"></span>
-              <span id="theme-label">Light</span>
-            </button>
+            <div class="theme-toggle-wrap">
+              <button id="theme-toggle" type="button" class="corona-toggle" role="switch" aria-checked="false" aria-label="Switch to dark theme">
+                <span class="corona-toggle-knob" aria-hidden="true">
+                  <span class="corona-toggle-face corona-toggle-face--sun"></span>
+                  <span class="corona-toggle-face corona-toggle-face--moon"></span>
+                </span>
+              </button>
+              <span id="theme-label" class="theme-toggle-label">Light</span>
+            </div>
           </div>
         </header>
 
