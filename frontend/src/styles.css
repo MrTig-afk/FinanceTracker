@@ -547,20 +547,23 @@ a.nav-item {
   border-radius: 7px;
   margin: 0 -7px;
   padding: 2px 7px;
-  border-left: 3px solid transparent;
-  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .legend-row.pulse-hi .legend-row-top {
   animation: ftPulseHi 0.9s ease;
 }
 
-/* Hover emphasis: stronger tint + a coloured accent edge + a slight nudge so
- * the highlighted row is unmistakable at a glance, not just a faint wash. */
+/* Hover emphasis: stronger tint + a coloured accent edge so the highlighted
+ * row is unmistakable at a glance, not just a faint wash. An INSET box-shadow
+ * (not `border-left`) is used for the accent edge: a partial single-side
+ * border does not blend into `border-radius` corners in any browser — it
+ * renders a hard flat cut on that side instead of a rounded one. An inset
+ * shadow is clipped to the radius correctly, so all four corners stay round.
+ */
 .legend-row.is-hover .legend-row-top {
   background-color: var(--hl);
-  border-left-color: var(--hl-ring, var(--accent));
-  transform: translateX(3px);
+  box-shadow: inset 3px 0 0 0 var(--hl-ring, var(--accent));
 }
 
 .legend-dot {
