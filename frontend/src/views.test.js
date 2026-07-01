@@ -12,8 +12,10 @@ import { initViews } from './views.js';
 
 const SHELL_HTML = `
   <nav>
-    <a href="#" class="nav-item nav-item--active" data-view="overview">Overview</a>
     <a href="#" class="nav-item" data-view="upload">Upload</a>
+    <a href="#" class="nav-item nav-item--active" data-view="overview">Overview</a>
+    <a href="#" class="nav-item" data-view="monthly">Monthly</a>
+    <a href="#" class="nav-item" data-view="yearly">Yearly</a>
     <a href="#" class="nav-item" data-view="context">Category context</a>
     <span class="nav-item nav-item--inert">History</span>
     <span class="nav-item nav-item--inert">Settings</span>
@@ -35,6 +37,12 @@ const SHELL_HTML = `
         <div id="dropzone-westpac"></div>
         <button id="upload-submit" type="button">Upload</button>
       </section>
+    </section>
+    <section class="view" data-view="monthly" hidden>
+      <select id="monthly-select"></select>
+    </section>
+    <section class="view" data-view="yearly" hidden>
+      <select id="yearly-select"></select>
     </section>
     <section class="view" data-view="context" hidden>
       <div id="category-cards"></div>
@@ -80,6 +88,12 @@ describe('initViews default state', () => {
     expect(sectionFor('context').hidden).toBe(true);
   });
 
+  it('hides the monthly and yearly views by default', () => {
+    controller = initViews({ root: document });
+    expect(sectionFor('monthly').hidden).toBe(true);
+    expect(sectionFor('yearly').hidden).toBe(true);
+  });
+
   it('marks the overview nav item active by default', () => {
     controller = initViews({ root: document });
     expect(navFor('overview').classList.contains('nav-item--active')).toBe(true);
@@ -123,6 +137,87 @@ describe('clicking a nav item', () => {
     controller = initViews({ root: document });
     navFor('context').click();
     expect(document.querySelector('.site-header h1').textContent).toBe('Category context');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Monthly / Yearly (v2 Pass 1) — nav order + view switching
+// ---------------------------------------------------------------------------
+
+describe('nav order', () => {
+  it('lists nav items in the exact order Upload, Overview, Monthly, Yearly, Category context', () => {
+    const items = Array.from(document.querySelectorAll('nav > *')).map(
+      (el) => el.dataset.view ?? el.textContent.trim(),
+    );
+    expect(items).toEqual(['upload', 'overview', 'monthly', 'yearly', 'context', 'History', 'Settings']);
+  });
+});
+
+describe('switching to the monthly view', () => {
+  it('shows monthly and hides overview/upload/yearly/context', () => {
+    controller = initViews({ root: document });
+    navFor('monthly').click();
+
+    expect(sectionFor('monthly').hidden).toBe(false);
+    expect(sectionFor('overview').hidden).toBe(true);
+    expect(sectionFor('upload').hidden).toBe(true);
+    expect(sectionFor('yearly').hidden).toBe(true);
+    expect(sectionFor('context').hidden).toBe(true);
+  });
+
+  it('sets the h1 heading to "Monthly"', () => {
+    controller = initViews({ root: document });
+    navFor('monthly').click();
+    expect(document.querySelector('.site-header h1').textContent).toBe('Monthly');
+  });
+
+  it('marks the monthly nav item active', () => {
+    controller = initViews({ root: document });
+    navFor('monthly').click();
+    expect(navFor('monthly').classList.contains('nav-item--active')).toBe(true);
+    expect(navFor('overview').classList.contains('nav-item--active')).toBe(false);
+  });
+
+  it('calls onShow with "monthly"', () => {
+    const onShow = vi.fn();
+    controller = initViews({ root: document, onShow });
+    onShow.mockClear();
+    navFor('monthly').click();
+    expect(onShow).toHaveBeenCalledWith('monthly');
+  });
+});
+
+describe('switching to the yearly view', () => {
+  it('shows yearly and hides overview/upload/monthly/context', () => {
+    controller = initViews({ root: document });
+    navFor('yearly').click();
+
+    expect(sectionFor('yearly').hidden).toBe(false);
+    expect(sectionFor('overview').hidden).toBe(true);
+    expect(sectionFor('upload').hidden).toBe(true);
+    expect(sectionFor('monthly').hidden).toBe(true);
+    expect(sectionFor('context').hidden).toBe(true);
+  });
+
+  it('sets the h1 heading to "Yearly"', () => {
+    controller = initViews({ root: document });
+    navFor('yearly').click();
+    expect(document.querySelector('.site-header h1').textContent).toBe('Yearly');
+  });
+
+  it('marks the yearly nav item active', () => {
+    controller = initViews({ root: document });
+    navFor('yearly').click();
+    expect(navFor('yearly').classList.contains('nav-item--active')).toBe(true);
+    expect(navFor('overview').classList.contains('nav-item--active')).toBe(false);
+  });
+
+  it('calls onShow with "yearly"', () => {
+    const onShow = vi.fn();
+    controller = initViews({ root: document, onShow });
+    onShow.mockClear();
+    navFor('yearly').click();
+    expect(onShow).toHaveBeenCalledWith('yearly');
   });
 });
 

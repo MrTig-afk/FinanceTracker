@@ -1147,3 +1147,303 @@ class TestReconcileBalances:
     def test_empty_list_returns_zero(self) -> None:
         with Store(":memory:") as store:
             assert store.reconcile_balances([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# TestPeriodViews (v2 Pass 1) — Monthly / Yearly + period-over-period
+# comparison. All fixtures are SYNTHETIC, generated inline. No real
+# transactions, no real CSVs.
+# ---------------------------------------------------------------------------
+
+
+class TestAvailablePeriods:
+    def test_available_months_empty_db_returns_empty_list(self) -> None:
+        with Store(":memory:") as store:
+            assert store.available_months() == []
+
+    def test_available_years_empty_db_returns_empty_list(self) -> None:
+        with Store(":memory:") as store:
+            assert store.available_years() == []
+
+    def test_available_months_distinct_descending(self) -> None:
+        t1 = _txn("SYNTH A", amount="-10.00", d=date(2026, 4, 1))
+        t2 = _txn("SYNTH B", amount="-20.00", d=date(2026, 4, 2))  # same month as t1
+        t3 = _txn("SYNTH C", amount="-30.00", d=date(2026, 6, 1))
+        t4 = _txn("SYNTH D", amount="-40.00", d=date(2026, 3, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2, t3, t4))
+            assert store.available_months() == ["2026-06", "2026-04", "2026-03"]
+
+    def test_available_years_distinct_descending(self) -> None:
+        t1 = _txn("SYNTH A", amount="-10.00", d=date(2025, 3, 1))
+        t2 = _txn("SYNTH B", amount="-20.00", d=date(2025, 11, 1))  # same year as t1
+        t3 = _txn("SYNTH C", amount="-30.00", d=date(2026, 1, 1))
+        t4 = _txn("SYNTH D", amount="-40.00", d=date(2024, 6, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2, t3, t4))
+            assert store.available_years() == ["2026", "2025", "2024"]
+
+
+class TestMonthView:
+    def test_empty_db_exact_shape(self) -> None:
+        with Store(":memory:") as store:
+            result = store.month_view(None)
+        assert result == {
+            "period": "month",
+            "ym": None,
+            "prev_ym": None,
+            "totals": {},
+            "net": "0.00",
+            "count": 0,
+            "comparison": [],
+            "available_months": [],
+        }
+
+    def test_happy_path_totals_net_count_and_str_money(self) -> None:
+        """Decimal-exact accumulation; str(Decimal) out; NULL -> 'Uncategorised'."""
+        t_g1 = _txn("SYNTH GROCER ONE", amount="-33.33", d=date(2026, 6, 1))
+        t_g2 = _txn("SYNTH GROCER TWO", amount="-66.67", d=date(2026, 6, 2))
+        t_null = _txn("SYNTH UNKNOWN VENDOR", amount="-5.00", d=date(2026, 6, 3))
+        r = _result(t_g1, t_g2, t_null)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Groceries",
+                r.fingerprints[1]: "Groceries",
+            })
+            result = store.month_view("2026-06")
+
+        assert result["period"] == "month"
+        assert result["ym"] == "2026-06"
+        assert result["count"] == 3
+        assert result["totals"]["Groceries"] == "-100.00"
+        assert result["totals"]["Uncategorised"] == "-5.00"
+        assert result["net"] == "-105.00"
+        for v in result["totals"].values():
+            assert isinstance(v, str)
+        assert isinstance(result["net"], str)
+
+    def test_defaults_to_latest_populated_month(self) -> None:
+        t_may = _txn("SYNTH MAY VENDOR", amount="-100.00", d=date(2026, 5, 15))
+        t_jun = _txn("SYNTH JUN VENDOR", amount="-200.00", d=date(2026, 6, 15))
+        with Store(":memory:") as store:
+            store.add_new(_result(t_may, t_jun))
+            result = store.month_view(None)
+        assert result["ym"] == "2026-06"
+        assert result["count"] == 1
+
+    def test_single_period_no_previous_is_graceful(self) -> None:
+        """Single populated month: prev_ym is null; comparison still returns with
+        previous '0.00' and pct_change null — not an error, not empty."""
+        t = _txn("SYNTH ONLY MONTH ITEM", amount="-40.00", d=date(2026, 6, 1))
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({r.fingerprints[0]: "Groceries"})
+            result = store.month_view("2026-06")
+
+        assert result["prev_ym"] is None
+        assert len(result["comparison"]) == 1
+        row = result["comparison"][0]
+        assert row["category"] == "Groceries"
+        assert row["current"] == "-40.00"
+        assert row["previous"] == "0.00"
+        assert row["pct_change"] is None
+
+    def test_skip_gap_previous_populated_month(self) -> None:
+        """Data in 2026-06 and 2026-03 (gap at 04/05) -> prev_ym == '2026-03'."""
+        t_mar = _txn("SYNTH MARCH ITEM", amount="-10.00", d=date(2026, 3, 5))
+        t_jun = _txn("SYNTH JUNE ITEM", amount="-20.00", d=date(2026, 6, 5))
+        with Store(":memory:") as store:
+            store.add_new(_result(t_mar, t_jun))
+            result = store.month_view("2026-06")
+        assert result["prev_ym"] == "2026-03"
+        assert result["available_months"] == ["2026-06", "2026-03"]
+
+    def test_comparison_delta_and_pct_change_growth(self) -> None:
+        """Category present both periods, spend growing more negative -> positive pct.
+
+        Mirrors the spec's worked example exactly: current -150.00, previous
+        -100.00 -> delta -50.00, pct_change 50.0.
+        """
+        t_prev = _txn("SYNTH GROCER MAY", amount="-100.00", d=date(2026, 5, 10))
+        t_cur = _txn("SYNTH GROCER JUN", amount="-150.00", d=date(2026, 6, 10))
+        r = _result(t_prev, t_cur)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Groceries",
+                r.fingerprints[1]: "Groceries",
+            })
+            result = store.month_view("2026-06")
+
+        row = next(c for c in result["comparison"] if c["category"] == "Groceries")
+        assert row["current"] == "-150.00"
+        assert row["previous"] == "-100.00"
+        assert row["delta"] == "-50.00"
+        assert row["pct_change"] == 50.0
+
+    def test_comparison_brand_new_category_no_previous_pct_none(self) -> None:
+        """Category present in current but absent from previous -> previous '0.00',
+        pct_change null (never a huge number, never a divide-by-zero crash)."""
+        t_prev = _txn("SYNTH RENT MAY", amount="-100.00", d=date(2026, 5, 1))
+        t_cur_rent = _txn("SYNTH RENT JUN", amount="-100.00", d=date(2026, 6, 1))
+        t_cur_new = _txn("SYNTH NEW SUBSCRIPTION", amount="-15.00", d=date(2026, 6, 2))
+        r = _result(t_prev, t_cur_rent, t_cur_new)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Rent",
+                r.fingerprints[1]: "Rent",
+                r.fingerprints[2]: "Subscriptions",
+            })
+            result = store.month_view("2026-06")
+
+        row = next(c for c in result["comparison"] if c["category"] == "Subscriptions")
+        assert row["current"] == "-15.00"
+        assert row["previous"] == "0.00"
+        assert row["delta"] == "-15.00"
+        assert row["pct_change"] is None
+
+    def test_comparison_category_absent_from_current(self) -> None:
+        """Category present only in previous -> current '0.00', sensible delta/pct."""
+        t_prev_only = _txn("SYNTH ONE-OFF FEE", amount="-900.00", d=date(2026, 5, 1))
+        t_cur = _txn("SYNTH GROCER JUN", amount="-50.00", d=date(2026, 6, 1))
+        r = _result(t_prev_only, t_cur)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Rent",
+                r.fingerprints[1]: "Groceries",
+            })
+            result = store.month_view("2026-06")
+
+        row = next(c for c in result["comparison"] if c["category"] == "Rent")
+        assert row["current"] == "0.00"
+        assert row["previous"] == "-900.00"
+        assert row["delta"] == "900.00"
+        # delta / previous * 100 = 900 / -900 * 100 = -100.0
+        assert row["pct_change"] == -100.0
+
+    def test_comparison_ordered_by_abs_current_desc(self) -> None:
+        t1 = _txn("SYNTH SMALL", amount="-10.00", d=date(2026, 6, 1))
+        t2 = _txn("SYNTH BIG", amount="-500.00", d=date(2026, 6, 2))
+        t3 = _txn("SYNTH MEDIUM", amount="-100.00", d=date(2026, 6, 3))
+        r = _result(t1, t2, t3)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Other",
+                r.fingerprints[1]: "Rent",
+                r.fingerprints[2]: "Groceries",
+            })
+            result = store.month_view("2026-06")
+
+        names = [row["category"] for row in result["comparison"]]
+        assert names == ["Rent", "Groceries", "Other"]
+
+    def test_available_months_included_in_response(self) -> None:
+        t1 = _txn("SYNTH A", amount="-10.00", d=date(2026, 5, 1))
+        t2 = _txn("SYNTH B", amount="-20.00", d=date(2026, 6, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2))
+            result = store.month_view("2026-06")
+        assert result["available_months"] == ["2026-06", "2026-05"]
+
+
+class TestYearView:
+    def test_empty_db_exact_shape(self) -> None:
+        with Store(":memory:") as store:
+            result = store.year_view(None)
+        assert result == {
+            "period": "year",
+            "y": None,
+            "prev_y": None,
+            "totals": {},
+            "net": "0.00",
+            "count": 0,
+            "comparison": [],
+            "available_years": [],
+        }
+
+    def test_happy_path_aggregates_across_months_in_one_year(self) -> None:
+        t1 = _txn("SYNTH JAN ITEM", amount="-40.00", d=date(2026, 1, 5))
+        t2 = _txn("SYNTH JUN ITEM", amount="-60.00", d=date(2026, 6, 5))
+        t_null = _txn("SYNTH UNKNOWN ITEM", amount="-5.00", d=date(2026, 3, 5))
+        r = _result(t1, t2, t_null)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Groceries",
+                r.fingerprints[1]: "Groceries",
+            })
+            result = store.year_view("2026")
+
+        assert result["period"] == "year"
+        assert result["y"] == "2026"
+        assert result["count"] == 3
+        assert result["totals"]["Groceries"] == "-100.00"
+        assert result["totals"]["Uncategorised"] == "-5.00"
+        assert result["net"] == "-105.00"
+        for v in result["totals"].values():
+            assert isinstance(v, str)
+
+    def test_defaults_to_latest_populated_year(self) -> None:
+        t_2025 = _txn("SYNTH 2025 ITEM", amount="-100.00", d=date(2025, 6, 1))
+        t_2026 = _txn("SYNTH 2026 ITEM", amount="-200.00", d=date(2026, 1, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t_2025, t_2026))
+            result = store.year_view(None)
+        assert result["y"] == "2026"
+        assert result["count"] == 1
+
+    def test_single_period_no_previous_is_graceful(self) -> None:
+        t = _txn("SYNTH ONLY YEAR ITEM", amount="-70.00", d=date(2026, 1, 1))
+        r = _result(t)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({r.fingerprints[0]: "Groceries"})
+            result = store.year_view("2026")
+
+        assert result["prev_y"] is None
+        assert len(result["comparison"]) == 1
+        row = result["comparison"][0]
+        assert row["current"] == "-70.00"
+        assert row["previous"] == "0.00"
+        assert row["pct_change"] is None
+
+    def test_skip_gap_previous_populated_year(self) -> None:
+        """Data in 2026 and 2024 (gap at 2025) -> prev_y == '2024'."""
+        t_2024 = _txn("SYNTH 2024 ITEM", amount="-10.00", d=date(2024, 5, 1))
+        t_2026 = _txn("SYNTH 2026 ITEM", amount="-20.00", d=date(2026, 5, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t_2024, t_2026))
+            result = store.year_view("2026")
+        assert result["prev_y"] == "2024"
+        assert result["available_years"] == ["2026", "2024"]
+
+    def test_comparison_delta_and_pct_change(self) -> None:
+        t_prev = _txn("SYNTH GROCER 2025", amount="-1000.00", d=date(2025, 6, 1))
+        t_cur = _txn("SYNTH GROCER 2026", amount="-1500.00", d=date(2026, 6, 1))
+        r = _result(t_prev, t_cur)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Groceries",
+                r.fingerprints[1]: "Groceries",
+            })
+            result = store.year_view("2026")
+
+        row = next(c for c in result["comparison"] if c["category"] == "Groceries")
+        assert row["current"] == "-1500.00"
+        assert row["previous"] == "-1000.00"
+        assert row["delta"] == "-500.00"
+        assert row["pct_change"] == 50.0
+
+    def test_available_years_included_in_response(self) -> None:
+        t1 = _txn("SYNTH A", amount="-10.00", d=date(2025, 1, 1))
+        t2 = _txn("SYNTH B", amount="-20.00", d=date(2026, 1, 1))
+        with Store(":memory:") as store:
+            store.add_new(_result(t1, t2))
+            result = store.year_view("2026")
+        assert result["available_years"] == ["2026", "2025"]

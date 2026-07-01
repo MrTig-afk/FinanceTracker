@@ -55,3 +55,60 @@ describe('index.html — no new webfont dependency introduced', () => {
     expect(fontLinkMatches[0]).toContain('Figtree');
   });
 });
+
+// ---------------------------------------------------------------------------
+// v2 Pass 1 — nav reorder + Monthly/Yearly view sections.
+// ---------------------------------------------------------------------------
+
+describe('index.html — nav order (v2 Pass 1)', () => {
+  it('lists data-view attributes in the exact order: upload, overview, monthly, yearly, context', () => {
+    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/);
+    expect(navMatch).not.toBeNull();
+    const dataViews = [...navMatch[0].matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
+    expect(dataViews).toEqual(['upload', 'overview', 'monthly', 'yearly', 'context']);
+  });
+
+  it('keeps Overview as the only nav-item--active entry', () => {
+    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/)[0];
+    const activeMatches = navMatch.match(/nav-item--active/g) ?? [];
+    expect(activeMatches.length).toBe(1);
+    expect(navMatch).toContain('nav-item nav-item--active" data-view="overview"');
+  });
+
+  it('History and Settings remain inert (not converted to nav-view links)', () => {
+    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/)[0];
+    expect(navMatch).toContain('nav-item--inert');
+    expect(navMatch).not.toContain('data-view="history"');
+    expect(navMatch).not.toContain('data-view="settings"');
+  });
+});
+
+describe('index.html — Monthly view section', () => {
+  it('has a <section data-view="monthly" hidden> block', () => {
+    expect(html).toMatch(/<section class="view" data-view="monthly" hidden>/);
+  });
+
+  it('contains the monthly period select, message banner, and canvas', () => {
+    expect(html).toContain('id="monthly-select"');
+    expect(html).toContain('id="monthly-message"');
+    expect(html).toContain('id="monthly-canvas"');
+    expect(html).toContain('id="monthly-totals"');
+    expect(html).toContain('id="monthly-compare"');
+    expect(html).toContain('id="monthly-compare-label"');
+  });
+});
+
+describe('index.html — Yearly view section', () => {
+  it('has a <section data-view="yearly" hidden> block', () => {
+    expect(html).toMatch(/<section class="view" data-view="yearly" hidden>/);
+  });
+
+  it('contains the yearly period select, message banner, and canvas', () => {
+    expect(html).toContain('id="yearly-select"');
+    expect(html).toContain('id="yearly-message"');
+    expect(html).toContain('id="yearly-canvas"');
+    expect(html).toContain('id="yearly-totals"');
+    expect(html).toContain('id="yearly-compare"');
+    expect(html).toContain('id="yearly-compare-label"');
+  });
+});

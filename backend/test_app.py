@@ -581,3 +581,171 @@ class TestCategoryContextEndpoints:
     def test_put_malformed_body_422(self, api_client):
         r = api_client.put("/category-context", json={"nope": "not a valid body"})
         assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# TestPeriodEndpoints — GET /month, GET /year (v2 Pass 1)
+#
+# Rows are seeded directly into the app's store (same technique as
+# TestReclassifyEndpoint) via a SEPARATE sqlite3 connection to the same DB
+# file, so tests control category/date/year_month precisely without relying
+# on the fake analyser. All descriptions/amounts are SYNTHETIC.
+# ---------------------------------------------------------------------------
+
+
+class TestPeriodEndpoints:
+    def _seed(self, tmp_path, rows: list[tuple]) -> None:
+        """rows: (fp, date, description, amount, bank, category, year_month)."""
+        conn = sqlite3.connect(str(tmp_path / "test.sqlite"))
+        conn.executemany(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES (?,?,?,?,?,?,?,'t')",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+    # -- empty DB -----------------------------------------------------------
+
+    def test_month_empty_db_exact_shape(self, api_client):
+        r = api_client.get("/month")
+        assert r.status_code == 200
+        assert r.json() == {
+            "period": "month",
+            "ym": None,
+            "prev_ym": None,
+            "totals": {},
+            "net": "0.00",
+            "count": 0,
+            "comparison": [],
+            "available_months": [],
+        }
+
+    def test_year_empty_db_exact_shape(self, api_client):
+        r = api_client.get("/year")
+        assert r.status_code == 200
+        assert r.json() == {
+            "period": "year",
+            "y": None,
+            "prev_y": None,
+            "totals": {},
+            "net": "0.00",
+            "count": 0,
+            "comparison": [],
+            "available_years": [],
+        }
+
+    # -- happy path -----------------------------------------------------------
+
+    def test_month_default_targets_latest_populated_month(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("mf1", "2026-04-01", "SYNTH APRIL ITEM", "-40.00", "commbank", "Groceries", "2026-04"),
+            ("mf2", "2026-05-01", "SYNTH MAY ITEM", "-50.00", "commbank", "Groceries", "2026-05"),
+            ("mf3", "2026-06-01", "SYNTH JUNE ITEM", "-60.00", "commbank", "Groceries", "2026-06"),
+        ])
+        r = api_client.get("/month")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ym"] == "2026-06"
+        assert body["prev_ym"] == "2026-05"
+        assert body["totals"] == {"Groceries": "-60.00"}
+        assert body["net"] == "-60.00"
+        assert body["count"] == 1
+        assert body["available_months"] == ["2026-06", "2026-05", "2026-04"]
+        row = body["comparison"][0]
+        assert row["category"] == "Groceries"
+        assert row["current"] == "-60.00"
+        assert row["previous"] == "-50.00"
+
+    def test_month_explicit_ym_query_param(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("mf1", "2026-04-01", "SYNTH APRIL ITEM", "-40.00", "commbank", "Groceries", "2026-04"),
+            ("mf2", "2026-05-01", "SYNTH MAY ITEM", "-50.00", "commbank", "Groceries", "2026-05"),
+        ])
+        r = api_client.get("/month", params={"ym": "2026-04"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ym"] == "2026-04"
+        assert body["prev_ym"] is None
+        assert body["totals"] == {"Groceries": "-40.00"}
+
+    def test_year_default_targets_latest_populated_year(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("yf1", "2025-06-01", "SYNTH 2025 ITEM", "-100.00", "commbank", "Groceries", "2025-06"),
+            ("yf2", "2026-01-01", "SYNTH 2026 ITEM A", "-150.00", "commbank", "Groceries", "2026-01"),
+            ("yf3", "2026-06-01", "SYNTH 2026 ITEM B", "-50.00", "commbank", "Groceries", "2026-06"),
+        ])
+        r = api_client.get("/year")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["y"] == "2026"
+        assert body["prev_y"] == "2025"
+        assert body["totals"] == {"Groceries": "-200.00"}
+        assert body["net"] == "-200.00"
+        assert body["count"] == 2
+        assert body["available_years"] == ["2026", "2025"]
+
+    def test_year_explicit_y_query_param(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("yf1", "2025-06-01", "SYNTH 2025 ITEM", "-100.00", "commbank", "Groceries", "2025-06"),
+            ("yf2", "2026-06-01", "SYNTH 2026 ITEM", "-50.00", "commbank", "Groceries", "2026-06"),
+        ])
+        r = api_client.get("/year", params={"y": "2025"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["y"] == "2025"
+        assert body["prev_y"] is None
+        assert body["totals"] == {"Groceries": "-100.00"}
+
+    # -- validation 400s ------------------------------------------------------
+
+    def test_month_slash_format_400(self, api_client):
+        r = api_client.get("/month", params={"ym": "2026/06"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "ym must be YYYY-MM"
+
+    def test_month_alpha_format_400(self, api_client):
+        r = api_client.get("/month", params={"ym": "june-2026"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "ym must be YYYY-MM"
+
+    def test_year_hyphenated_format_400(self, api_client):
+        r = api_client.get("/year", params={"y": "2026-01"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "y must be YYYY"
+
+    def test_year_alpha_format_400(self, api_client):
+        r = api_client.get("/year", params={"y": "twenty-twenty-six"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "y must be YYYY"
+
+    def test_year_short_digits_400(self, api_client):
+        r = api_client.get("/year", params={"y": "26"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "y must be YYYY"
+
+    # -- raw-description-leak guard (BLOCKING) ---------------------------------
+
+    def test_month_and_year_never_leak_raw_description_or_sensitive_keys(
+        self, api_client, tmp_path
+    ):
+        """A synthetic description token must never appear in /month or /year
+        response bodies, and neither response may carry a description/balance/
+        bank key anywhere (Store methods only ever SELECT category, amount)."""
+        unique_token = "ZZLEAKCANARY_MONTHLY_YEARLY_9182736450"
+        self._seed(tmp_path, [
+            ("lf1", "2026-06-01", unique_token, "-25.00", "commbank", "Groceries", "2026-06"),
+            ("lf2", "2026-05-01", "SYNTH PREV MONTH ITEM", "-10.00", "commbank", "Groceries", "2026-05"),
+        ])
+
+        month_r = api_client.get("/month")
+        year_r = api_client.get("/year")
+
+        for r in (month_r, year_r):
+            assert r.status_code == 200
+            body_text = r.text
+            assert unique_token not in body_text
+            assert '"description"' not in body_text
+            assert '"balance"' not in body_text
+            assert '"bank"' not in body_text

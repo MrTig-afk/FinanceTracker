@@ -5,6 +5,8 @@ Endpoints
 POST /upload    Accept CommBank and/or Westpac CSVs as multipart form fields.
 GET  /status    Health + last-run summary (no sensitive content).
 GET  /summary   Monthly spending totals (latest or ?month=YYYY-MM).
+GET  /month     Monthly breakdown + month-over-month comparison (latest or ?ym=YYYY-MM).
+GET  /year      Yearly breakdown + year-over-year comparison (latest or ?y=YYYY).
 GET  /category-context  The 9 canonical categories with stored hints (D1/D2).
 PUT  /category-context  Replace-all of the 9 canonical categories' hints.
 
@@ -18,6 +20,8 @@ Privacy contract
   no API key value or service-account path is ever included.
 - GET /summary returns the owner's own data to the owner's own localhost/Tailscale
   client — this is a local serve, not an off-machine send.
+- GET /month and GET /year are LOCAL, read-only aggregations of the same store —
+  same local-serve posture as /summary. No new off-machine call.
 
 Config (all from .env via python-dotenv — never hardcoded)
 -----------------------------------------------------------
@@ -244,6 +248,52 @@ async def summary(
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
 
     return app.state.store.summary(month)
+
+
+# ---------------------------------------------------------------------------
+# GET /month  (v2 Pass 1 — monthly breakdown + month-over-month comparison)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/month")
+async def month(
+    ym: Annotated[str | None, Query(description="YYYY-MM")] = None,
+):
+    """Return the monthly breakdown + month-over-month comparison for one month.
+
+    Query params:
+        ym   — optional "YYYY-MM". Omit to get the latest populated month.
+
+    LOCAL, read-only aggregation of the owner's own store — same local-serve
+    posture as /summary. Amounts are str(Decimal), never float.
+    """
+    if ym is not None and not re.match(r"^\d{4}-\d{2}$", ym):
+        raise HTTPException(status_code=400, detail="ym must be YYYY-MM")
+
+    return app.state.store.month_view(ym)
+
+
+# ---------------------------------------------------------------------------
+# GET /year  (v2 Pass 1 — yearly breakdown + year-over-year comparison)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/year")
+async def year(
+    y: Annotated[str | None, Query(description="YYYY")] = None,
+):
+    """Return the yearly breakdown + year-over-year comparison for one year.
+
+    Query params:
+        y   — optional "YYYY". Omit to get the latest populated year.
+
+    LOCAL, read-only aggregation of the owner's own store — same local-serve
+    posture as /summary. Amounts are str(Decimal), never float.
+    """
+    if y is not None and not re.match(r"^\d{4}$", y):
+        raise HTTPException(status_code=400, detail="y must be YYYY")
+
+    return app.state.store.year_view(y)
 
 
 # ---------------------------------------------------------------------------

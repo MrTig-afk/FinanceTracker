@@ -7,6 +7,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   fetchSummary,
+  fetchMonth,
+  fetchYear,
   fetchStatus,
   postReclassify,
   fetchCategoryContext,
@@ -120,6 +122,136 @@ describe('fetchSummary', () => {
     const err = await fetchSummary().catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchMonth / fetchYear — v2 Pass 1 period views
+// ---------------------------------------------------------------------------
+
+const CANNED_MONTH_VIEW = {
+  period: 'month',
+  ym: '2026-06',
+  prev_ym: '2026-05',
+  totals: { Groceries: '-50.00' },
+  net: '-50.00',
+  count: 1,
+  comparison: [],
+  available_months: ['2026-06', '2026-05'],
+};
+
+const CANNED_YEAR_VIEW = {
+  period: 'year',
+  y: '2026',
+  prev_y: '2025',
+  totals: { Groceries: '-500.00' },
+  net: '-500.00',
+  count: 10,
+  comparison: [],
+  available_years: ['2026', '2025'],
+};
+
+describe('fetchMonth', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_MONTH_VIEW));
+    const result = await fetchMonth('2026-06');
+    expect(result).toEqual(CANNED_MONTH_VIEW);
+  });
+
+  it('appends ?ym= query param when a ym string is supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_MONTH_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchMonth('2026-06');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/month?ym=2026-06');
+  });
+
+  it('omits the query string entirely when ym is not supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_MONTH_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchMonth();
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toMatch(/\/month$/);
+    expect(calledUrl).not.toContain('?');
+  });
+
+  it('sends a GET request with no body', async () => {
+    const mockFetch = makeOkFetch(CANNED_MONTH_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchMonth('2026-06');
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.body).toBeUndefined();
+    expect(options.method === undefined || options.method === 'GET').toBe(true);
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(fetchMonth()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError on a 400 (malformed ym)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await fetchMonth('bad-value').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchMonth().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+describe('fetchYear', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_YEAR_VIEW));
+    const result = await fetchYear('2026');
+    expect(result).toEqual(CANNED_YEAR_VIEW);
+  });
+
+  it('appends ?y= query param when a y string is supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_YEAR_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchYear('2026');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/year?y=2026');
+  });
+
+  it('omits the query string entirely when y is not supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_YEAR_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchYear();
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toMatch(/\/year$/);
+    expect(calledUrl).not.toContain('?');
+  });
+
+  it('sends a GET request with no body', async () => {
+    const mockFetch = makeOkFetch(CANNED_YEAR_VIEW);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchYear('2026');
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.body).toBeUndefined();
+    expect(options.method === undefined || options.method === 'GET').toBe(true);
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(fetchYear()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError on a 400 (malformed y)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await fetchYear('bad-value').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchYear().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
   });
 });
 

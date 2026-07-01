@@ -29,11 +29,17 @@
         </div>
 
         <nav class="sidebar-nav">
+          <a href="#" class="nav-item" data-view="upload">
+            <span class="nav-dot"></span>Upload
+          </a>
           <a href="#" class="nav-item nav-item--active" data-view="overview">
             <span class="nav-dot"></span>Overview
           </a>
-          <a href="#" class="nav-item" data-view="upload">
-            <span class="nav-dot"></span>Upload
+          <a href="#" class="nav-item" data-view="monthly">
+            <span class="nav-dot"></span>Monthly
+          </a>
+          <a href="#" class="nav-item" data-view="yearly">
+            <span class="nav-dot"></span>Yearly
           </a>
           <a href="#" class="nav-item" data-view="context">
             <span class="nav-dot"></span>Category context
@@ -194,6 +200,62 @@
               </section>
             </div>
             <p id="context-status" class="context-status" role="status" aria-live="polite"></p>
+          </section>
+
+          <!-- Monthly view -->
+          <section class="view" data-view="monthly" hidden>
+            <div class="period-toolbar">
+              <label class="period-select-label" for="monthly-select">Month</label>
+              <select id="monthly-select" class="period-select"></select>
+            </div>
+            <p id="monthly-message" class="message-banner" hidden></p>
+            <div class="period-grid">
+              <section class="card period-donut-card">
+                <div class="donut-wrapper">
+                  <canvas id="monthly-canvas" width="200" height="200"></canvas>
+                  <div class="donut-overlay">
+                    <span class="donut-overlay-label">SPENT</span>
+                    <span id="monthly-spent" class="donut-overlay-total"></span>
+                  </div>
+                </div>
+                <div id="monthly-net" class="net-value"></div>
+              </section>
+              <section class="card period-totals-card">
+                <table class="totals-table"><tbody id="monthly-totals"></tbody></table>
+              </section>
+              <section class="card period-compare-card">
+                <h2 class="compare-title">Change vs <span id="monthly-compare-label"></span></h2>
+                <table class="compare-table"><tbody id="monthly-compare"></tbody></table>
+              </section>
+            </div>
+          </section>
+
+          <!-- Yearly view -->
+          <section class="view" data-view="yearly" hidden>
+            <div class="period-toolbar">
+              <label class="period-select-label" for="yearly-select">Year</label>
+              <select id="yearly-select" class="period-select"></select>
+            </div>
+            <p id="yearly-message" class="message-banner" hidden></p>
+            <div class="period-grid">
+              <section class="card period-donut-card">
+                <div class="donut-wrapper">
+                  <canvas id="yearly-canvas" width="200" height="200"></canvas>
+                  <div class="donut-overlay">
+                    <span class="donut-overlay-label">SPENT</span>
+                    <span id="yearly-spent" class="donut-overlay-total"></span>
+                  </div>
+                </div>
+                <div id="yearly-net" class="net-value"></div>
+              </section>
+              <section class="card period-totals-card">
+                <table class="totals-table"><tbody id="yearly-totals"></tbody></table>
+              </section>
+              <section class="card period-compare-card">
+                <h2 class="compare-title">Change vs <span id="yearly-compare-label"></span></h2>
+                <table class="compare-table"><tbody id="yearly-compare"></tbody></table>
+              </section>
+            </div>
           </section>
         </div>
       </div>

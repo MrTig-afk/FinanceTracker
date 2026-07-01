@@ -12,6 +12,8 @@ import { postUpload } from './upload.js';
 import { initTheme } from './theme.js';
 import { initViews } from './views.js';
 import { createCategoryContext } from './categoryContextController.js';
+import { createMonthly } from './monthlyController.js';
+import { createYearly } from './yearlyController.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -96,15 +98,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // -------------------------------------------------------------------------
-  // View switching — Overview / Upload / Category context / (History, Settings
-  // stay inert). Lazy-create the category-context controller on first switch;
-  // re-run the dashboard load() whenever Overview is shown. initViews() shows
-  // the default (Overview) view synchronously, which fires onShow('overview')
-  // and triggers the initial load() below — no separate call needed.
-  // Created before the upload controller so the latter can trigger a view
-  // switch after a successful upload (see onUploadSuccess below).
+  // View switching — Upload / Overview / Monthly / Yearly / Category context /
+  // (History, Settings stay inert). Lazy-create the monthly/yearly/category-
+  // context controllers on first switch; re-run the dashboard load() whenever
+  // Overview is shown. initViews() shows the default (Overview) view
+  // synchronously, which fires onShow('overview') and triggers the initial
+  // load() below — no separate call needed. Created before the upload
+  // controller so the latter can trigger a view switch after a successful
+  // upload (see onUploadSuccess below).
   // -------------------------------------------------------------------------
   let categoryContext = null;
+  let monthly = null;
+  let yearly = null;
 
   const views = initViews({
     root: document,
@@ -116,6 +121,12 @@ document.addEventListener('DOMContentLoaded', () => {
           categoryContext = createCategoryContext({ root: document });
         }
         categoryContext.load();
+      } else if (view === 'monthly') {
+        if (!monthly) monthly = createMonthly({ root: document });
+        monthly.load();
+      } else if (view === 'yearly') {
+        if (!yearly) yearly = createYearly({ root: document });
+        yearly.load();
       }
     },
   });
@@ -128,6 +139,8 @@ document.addEventListener('DOMContentLoaded', () => {
     root: document,
     queue,
     onUploaded: load,
+    // Targets Overview BY VIEW NAME ('overview'), not by nav position — so the
+    // nav reorder (Upload, Overview, Monthly, Yearly, ...) never breaks this.
     onUploadSuccess: () => views.show('overview'),
   });
   queue.start();

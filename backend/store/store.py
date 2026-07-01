@@ -820,3 +820,160 @@ class Store:
             )
             for row in rows
         ]
+
+    # ------------------------------------------------------------------
+    # Period views (v2 Pass 1): Monthly / Yearly + period-over-period
+    # comparison. Read-only aggregation over the existing schema — no new
+    # tables, no write-path change. Money contract copies summary() exactly:
+    # Decimal accumulation in Python, str(Decimal) out, NULL category ->
+    # "Uncategorised", defined empty shape when there is no data.
+    # ------------------------------------------------------------------
+
+    def available_months(self) -> list[str]:
+        """All distinct 'YYYY-MM' present, DESCENDING (latest first). [] when empty."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT year_month FROM transactions ORDER BY year_month DESC"
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def available_years(self) -> list[str]:
+        """All distinct 'YYYY' present, DESCENDING. [] when empty."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT substr(year_month, 1, 4) AS y FROM transactions ORDER BY 1 DESC"
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def _totals_for(self, where_sql: str, param: str) -> tuple[dict[str, Decimal], Decimal, int]:
+        """Accumulate (totals-by-category, net, count) for one WHERE clause + param.
+
+        Same Decimal accumulation loop as summary(); NULL category -> "Uncategorised".
+        `where_sql` must reference exactly one '?' placeholder, bound to `param`.
+        """
+        rows = self.conn.execute(
+            f"SELECT category, amount FROM transactions WHERE {where_sql}",
+            (param,),
+        ).fetchall()
+
+        totals: dict[str, Decimal] = {}
+        net = Decimal("0.00")
+        for row in rows:
+            cat = row["category"] if row["category"] is not None else "Uncategorised"
+            amt = amount_from_text(row["amount"])
+            totals[cat] = totals.get(cat, Decimal("0.00")) + amt
+            net += amt
+
+        return totals, net, len(rows)
+
+    def _compare(
+        self, current: dict[str, Decimal], previous: dict[str, Decimal]
+    ) -> list[dict]:
+        """Build comparison rows: union of categories, delta = current - previous.
+
+        pct_change = (current - previous) / previous * 100 using the SIGNED previous
+        as denominator, rounded to 1dp as a float; None when previous == 0 (including
+        a category absent from the previous period). Ordered by abs(current) DESC,
+        tie-broken by category name ASC (mirrors summary.js#categoryRows).
+        """
+        entries: list[tuple[str, Decimal, Decimal, Decimal, float | None]] = []
+        for cat in set(current) | set(previous):
+            cur = current.get(cat, Decimal("0.00"))
+            prev = previous.get(cat, Decimal("0.00"))
+            delta = cur - prev
+            pct: float | None
+            if prev == 0:
+                pct = None
+            else:
+                pct = round(float(delta) / float(prev) * 100, 1)
+            entries.append((cat, cur, prev, delta, pct))
+
+        entries.sort(key=lambda e: (-abs(e[1]), e[0]))
+
+        return [
+            {
+                "category": cat,
+                "current": str(cur),
+                "previous": str(prev),
+                "delta": str(delta),
+                "pct_change": pct,
+            }
+            for cat, cur, prev, delta, pct in entries
+        ]
+
+    def month_view(self, ym: str | None = None) -> dict:
+        """Breakdown + month-over-month comparison for one month.
+
+        ym defaults to the latest populated month (available_months()[0]).
+        'Previous' = the greatest populated month strictly < ym (skip gaps),
+        from available_months(); None if there is no earlier populated month.
+        Empty DB -> the defined empty shape (see spec).
+        """
+        months = self.available_months()
+        if ym is None:
+            ym = months[0] if months else None
+
+        if ym is None:
+            return {
+                "period": "month",
+                "ym": None,
+                "prev_ym": None,
+                "totals": {},
+                "net": "0.00",
+                "count": 0,
+                "comparison": [],
+                "available_months": [],
+            }
+
+        totals, net, count = self._totals_for("year_month = ?", ym)
+        prev_ym = next((m for m in months if m < ym), None)
+        prev_totals = self._totals_for("year_month = ?", prev_ym)[0] if prev_ym else {}
+
+        return {
+            "period": "month",
+            "ym": ym,
+            "prev_ym": prev_ym,
+            "totals": {k: str(v) for k, v in totals.items()},
+            "net": str(net),
+            "count": count,
+            "comparison": self._compare(totals, prev_totals),
+            "available_months": months,
+        }
+
+    def year_view(self, y: str | None = None) -> dict:
+        """Breakdown + year-over-year comparison for one year.
+
+        y defaults to the latest populated year. 'Previous' = greatest populated
+        year strictly < y (skip gaps); None if none earlier. Empty DB -> the
+        defined empty shape (see spec).
+        """
+        years = self.available_years()
+        if y is None:
+            y = years[0] if years else None
+
+        if y is None:
+            return {
+                "period": "year",
+                "y": None,
+                "prev_y": None,
+                "totals": {},
+                "net": "0.00",
+                "count": 0,
+                "comparison": [],
+                "available_years": [],
+            }
+
+        totals, net, count = self._totals_for("year_month LIKE ?", f"{y}-%")
+        prev_y = next((yy for yy in years if yy < y), None)
+        prev_totals = (
+            self._totals_for("year_month LIKE ?", f"{prev_y}-%")[0] if prev_y else {}
+        )
+
+        return {
+            "period": "year",
+            "y": y,
+            "prev_y": prev_y,
+            "totals": {k: str(v) for k, v in totals.items()},
+            "net": str(net),
+            "count": count,
+            "comparison": self._compare(totals, prev_totals),
+            "available_years": years,
+        }

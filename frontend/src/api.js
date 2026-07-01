@@ -1,8 +1,8 @@
 /**
  * api.js — network layer.
- * Talks to the owner's own backend only (/summary, /status, /reclassify,
- * /category-context). No secrets here. VITE_API_BASE is a non-secret URL
- * (localhost / Tailscale).
+ * Talks to the owner's own backend only (/summary, /month, /year, /status,
+ * /reclassify, /category-context). No secrets here. VITE_API_BASE is a
+ * non-secret URL (localhost / Tailscale).
  */
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000';
@@ -26,6 +26,58 @@ export async function fetchSummary(month) {
   let url = `${API_BASE}/summary`;
   if (month) {
     url += `?${new URLSearchParams({ month }).toString()}`;
+  }
+
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch the monthly breakdown + month-over-month comparison from the backend.
+ * @param {string|undefined} ym  Optional 'YYYY-MM'. Omitted → backend returns latest.
+ * @returns {Promise<object>}    Parsed JSON month_view object.
+ * @throws {ApiError}            On network failure or non-2xx response.
+ */
+export async function fetchMonth(ym) {
+  let url = `${API_BASE}/month`;
+  if (ym) {
+    url += `?${new URLSearchParams({ ym }).toString()}`;
+  }
+
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch the yearly breakdown + year-over-year comparison from the backend.
+ * @param {string|undefined} y  Optional 'YYYY'. Omitted → backend returns latest.
+ * @returns {Promise<object>}   Parsed JSON year_view object.
+ * @throws {ApiError}           On network failure or non-2xx response.
+ */
+export async function fetchYear(y) {
+  let url = `${API_BASE}/year`;
+  if (y) {
+    url += `?${new URLSearchParams({ y }).toString()}`;
   }
 
   let res;
