@@ -12,7 +12,7 @@
 
 'use strict';
 
-const CACHE = 'financetracker-shell-v1';
+const CACHE = 'financetracker-shell-v2';
 
 // App-shell files to pre-cache on install.
 // Hashed JS/CSS assets are added opportunistically by the fetch handler;
@@ -96,6 +96,28 @@ self.addEventListener('fetch', (e) => {
   }
 
   if (policy === 'shell-cache') {
+    // Navigations (index.html) are network-first so a new deploy is picked up on
+    // the next load: fetch fresh HTML (and thus fresh hashed asset refs), refresh
+    // the cache, and fall back to cache only when offline.
+    if (e.request.mode === 'navigate') {
+      e.respondWith(
+        fetch(e.request)
+          .then((res) => {
+            const clone = res.clone();
+            caches.open(CACHE).then((c) => c.put(e.request, clone));
+            return res;
+          })
+          .catch(() =>
+            caches
+              .match(e.request)
+              .then((cached) => cached || caches.match('/index.html')),
+          ),
+      );
+      return;
+    }
+
+    // Hashed assets (.js/.css) are cache-first — safe because the filename hash
+    // changes each build, so a new build is a new URL (no staleness).
     e.respondWith(
       caches.match(e.request).then((cached) => {
         if (cached) return cached;
@@ -108,11 +130,7 @@ self.addEventListener('fetch', (e) => {
             return res;
           })
           .catch(() => {
-            // Offline fallback: serve the cached index for navigations.
-            if (e.request.mode === 'navigate') {
-              return caches.match('/index.html');
-            }
-            // For other assets, just let the failure propagate.
+            // No cache and no network — let the failure propagate.
             return undefined;
           });
       }),

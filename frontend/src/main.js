@@ -11,16 +11,34 @@ import { createUploadController } from './uploadController.js';
 import { postUpload } from './upload.js';
 
 // ---------------------------------------------------------------------------
-// Service worker registration (FR-3 — installable PWA)
-// Guarded so it never runs outside a browser / secure context.
-// public/sw.js is served at /sw.js by Vite (public/ root) without bundling.
+// Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
+// In dev the SW would serve cached .js/.css and hide code changes, so we never
+// register it during development and actively remove any worker + caches a prior
+// session left behind. Vite statically replaces import.meta.env.PROD, so only one
+// branch survives in each build.
 // ---------------------------------------------------------------------------
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {
-      // SW registration failures are non-fatal (e.g. non-HTTPS dev, privacy mode).
+if (import.meta.env.PROD) {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {
+        // SW registration failures are non-fatal (e.g. non-HTTPS dev, privacy mode).
+      });
     });
-  });
+  }
+} else {
+  // Dev: guarantee no stale-caching worker is active, and drop its caches.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => regs.forEach((r) => r.unregister()))
+      .catch(() => {});
+  }
+  if (self.caches) {
+    caches
+      .keys()
+      .then((keys) => keys.forEach((k) => caches.delete(k)))
+      .catch(() => {});
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -57,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchStatus()
       .then((status) => {
         if (!statusDot) return;
-        if (status && status.ok) {
+        if (status && status.status === 'ok') {
           statusDot.style.backgroundColor = '#4CAF50';
           statusDot.title = 'Backend online';
         } else {
