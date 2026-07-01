@@ -66,11 +66,13 @@ class FakeAnalyserClient:
     def __init__(self, default_category: str = "Groceries") -> None:
         self.call_count = 0
         self.received_user_prompts: list[str] = []
+        self.received_system_prompts: list[str] = []
         self._default_category = default_category
 
     def complete(self, *, system_prompt: str, user_prompt: str) -> tuple[dict, str]:
         self.call_count += 1
         self.received_user_prompts.append(user_prompt)
+        self.received_system_prompts.append(system_prompt)
         items = json.loads(user_prompt)
         categories = {str(item["row_index"]): self._default_category for item in items}
         return (
@@ -572,3 +574,116 @@ class TestAutoDetect:
         assert r2.files_skipped == 0
         assert any("unrecognised" in e.lower() for e in r2.errors)
         store.close()
+
+
+# ---------------------------------------------------------------------------
+# TestCategoryContextPreamble — TAXONOMY & CONTEXT prepend, privacy-preserved
+# ---------------------------------------------------------------------------
+
+class TestCategoryContextPreamble:
+    """With stored/seeded context, the fake analyser receives a system_prompt
+    beginning with the TAXONOMY & CONTEXT preamble, and user_prompt is unaffected
+    (still only row_index/cleaned_description/amount; no account number leak)."""
+
+    def test_system_prompt_starts_with_taxonomy_and_context(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert fake.call_count >= 1
+        for prompt in fake.received_system_prompts:
+            assert prompt.startswith("TAXONOMY & CONTEXT")
+
+    def test_stored_hints_appear_in_system_prompt(self, tmp_path):
+        """A custom (SYNTHETIC) hint saved via the store shows up in the preamble."""
+        store = Store(":memory:")
+        store.save_category_context({"Groceries": "SYNTH CORNER STORE, SYNTH DELI"})
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        all_prompts = " ".join(fake.received_system_prompts)
+        assert "SYNTH CORNER STORE, SYNTH DELI" in all_prompts
+
+    def test_user_prompt_still_only_three_keys_with_context(self, tmp_path):
+        """BLOCKING: context preamble never leaks into or alters user_prompt shape."""
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        for prompt_str in fake.received_user_prompts:
+            for item in json.loads(prompt_str):
+                assert set(item.keys()) == {"row_index", "cleaned_description", "amount"}
+
+    def test_account_number_never_in_user_prompt_or_preamble(self, tmp_path):
+        """BLOCKING: the synthetic account number never appears in the outgoing
+        payload OR the preamble, even with context stored."""
+        store = Store(":memory:")
+        store.save_category_context({"Groceries": "SYNTH HINT MENTIONING NOTHING SECRET"})
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        all_text = " ".join(fake.received_user_prompts) + " ".join(fake.received_system_prompts)
+        assert _FAKE_ACCT not in all_text
+
+    def test_idempotent_rerun_with_context_still_zero_llm_calls(self, tmp_path):
+        """An unchanged re-run is still a no-op with zero LLM calls even when
+        category context exists (idempotency unaffected by the preamble)."""
+        store = Store(":memory:")
+        store.save_category_context({"Groceries": "SYNTH HINT"})
+        fake = FakeAnalyserClient()
+        uploads = _make_uploads()
+
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        calls_after_first = fake.call_count
+
+        second = run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert second.noop is True
+        assert fake.call_count == calls_after_first

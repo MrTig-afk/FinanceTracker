@@ -498,3 +498,86 @@ class TestReclassifyEndpoint:
     def test_bad_month_400(self, api_client):
         r = api_client.post("/reclassify", params={"enabled": "true", "month": "2026/06"})
         assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# TestCategoryContextEndpoints — GET/PUT /category-context (D1/D2)
+# ---------------------------------------------------------------------------
+
+
+class TestCategoryContextEndpoints:
+    """GET/PUT /category-context — fixed 9-category taxonomy, hints-only edits.
+
+    All hint bodies in this class are SYNTHETIC — never the real D2 defaults'
+    content and never transaction data.
+    """
+
+    def test_get_status_200(self, api_client):
+        assert api_client.get("/category-context").status_code == 200
+
+    def test_get_returns_nine_categories(self, api_client):
+        body = api_client.get("/category-context").json()
+        assert len(body["categories"]) == 9
+
+    def test_get_categories_in_taxonomy_order(self, api_client):
+        from backend.store import TAXONOMY
+
+        body = api_client.get("/category-context").json()
+        names = [c["name"] for c in body["categories"]]
+        assert names == list(TAXONOMY)
+
+    def test_get_seeded_hints_non_empty_on_fresh_db(self, api_client):
+        """D2: fresh DB already has real example hints (not blank/placeholder)."""
+        body = api_client.get("/category-context").json()
+        for c in body["categories"]:
+            assert c["hints"].strip() != ""
+
+    def test_get_category_has_expected_keys(self, api_client):
+        body = api_client.get("/category-context").json()
+        for c in body["categories"]:
+            assert set(c.keys()) == {"name", "color", "hints", "position"}
+
+    def test_put_status_200(self, api_client):
+        r = api_client.put(
+            "/category-context",
+            json={"categories": [{"name": "Groceries", "hints": "SYNTH HINT A"}]},
+        )
+        assert r.status_code == 200
+
+    def test_put_updates_named_category_hint(self, api_client):
+        api_client.put(
+            "/category-context",
+            json={"categories": [{"name": "Groceries", "hints": "SYNTH HINT A"}]},
+        )
+        body = api_client.get("/category-context").json()
+        by_name = {c["name"]: c["hints"] for c in body["categories"]}
+        assert by_name["Groceries"] == "SYNTH HINT A"
+
+    def test_put_still_returns_nine(self, api_client):
+        body = api_client.put(
+            "/category-context",
+            json={"categories": [{"name": "Groceries", "hints": "SYNTH HINT A"}]},
+        ).json()
+        assert len(body["categories"]) == 9
+
+    def test_put_unknown_category_name_does_not_create_it(self, api_client):
+        r = api_client.put(
+            "/category-context",
+            json={"categories": [{"name": "Bogus", "hints": "SYNTH VALUE"}]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        names = {c["name"] for c in body["categories"]}
+        assert "Bogus" not in names
+        assert len(body["categories"]) == 9
+
+    def test_put_missing_name_422(self, api_client):
+        r = api_client.put(
+            "/category-context",
+            json={"categories": [{"hints": "SYNTH VALUE"}]},
+        )
+        assert r.status_code == 422
+
+    def test_put_malformed_body_422(self, api_client):
+        r = api_client.put("/category-context", json={"nope": "not a valid body"})
+        assert r.status_code == 422

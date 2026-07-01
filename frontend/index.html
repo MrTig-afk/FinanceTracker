@@ -27,13 +27,13 @@
         </div>
 
         <nav class="sidebar-nav">
-          <a href="#" class="nav-item nav-item--active">
+          <a href="#" class="nav-item nav-item--active" data-view="overview">
             <span class="nav-dot"></span>Overview
           </a>
-          <a href="#upload-card" class="nav-item">
+          <a href="#" class="nav-item" data-view="upload">
             <span class="nav-dot"></span>Upload
           </a>
-          <a href="#" class="nav-item">
+          <a href="#" class="nav-item" data-view="context">
             <span class="nav-dot"></span>Category context
           </a>
           <span class="nav-item nav-item--inert">
@@ -65,102 +65,122 @@
         </header>
 
         <div class="main-content">
-          <div id="message" class="message-banner" hidden></div>
+          <!-- Overview view -->
+          <section class="view" data-view="overview">
+            <div id="message" class="message-banner" hidden></div>
 
-          <div class="overview-grid">
-            <!-- Donut card -->
-            <section class="card donut-card">
-              <div class="donut-wrapper">
-                <div id="donut-glow" class="donut-glow" aria-hidden="true"></div>
-                <canvas id="donut-canvas" width="200" height="200"></canvas>
-                <div class="donut-overlay">
-                  <span class="donut-overlay-label">SPENT</span>
-                  <span id="spent-total" class="donut-overlay-total"></span>
-                </div>
-              </div>
-              <div class="donut-side">
-                <div id="legend" class="legend"></div>
-                <div id="net-value" class="net-value"></div>
-              </div>
-            </section>
-
-            <!-- Fuel-stop reclassify card -->
-            <section class="card fuel-card">
-              <div class="fuel-card-head">
-                <div class="fuel-card-title-block">
-                  <div class="fuel-card-title">
-                    <span class="swatch swatch--transport"></span>&rarr;<span
-                      class="swatch swatch--dining"
-                    ></span>
-                    Small servo spends
+            <div class="overview-grid">
+              <!-- Donut card -->
+              <section class="card donut-card">
+                <div class="donut-wrapper">
+                  <div id="donut-glow" class="donut-glow" aria-hidden="true"></div>
+                  <canvas id="donut-canvas" width="200" height="200"></canvas>
+                  <div class="donut-overlay">
+                    <span class="donut-overlay-label">SPENT</span>
+                    <span id="spent-total" class="donut-overlay-total"></span>
                   </div>
-                  <p class="fuel-card-desc">
-                    Count purchases <strong>under $10</strong> at fuel &amp; convenience stops
-                    (BP, 7-Eleven, Ampol, Shell, Caltex, Coles Express, Reddy Express) as
-                    <strong>Dining Out</strong> instead of Transport — that&rsquo;s usually a
-                    coffee or a pie, not fuel.
-                  </p>
                 </div>
-                <label class="fuel-switch" for="fuel-rule-toggle">
-                  <input id="fuel-rule-toggle" type="checkbox" />
-                  <span class="fuel-switch-track"><span class="knob"></span></span>
-                </label>
-              </div>
-
-              <div class="fuel-card-divider"></div>
-
-              <div class="fuel-card-rows">
-                <div class="fuel-card-row">
-                  <span>Fuel &amp; snacks over $10</span>
-                  <span class="fuel-card-row-value">Stays Transport</span>
+                <div class="donut-side">
+                  <div id="legend" class="legend"></div>
+                  <div id="net-value" class="net-value"></div>
                 </div>
-                <div class="fuel-card-row">
-                  <span>Travel-only fares <span class="muted-inline">(Opal, Myki, SkyBus)</span></span>
-                  <span class="fuel-card-row-value">Never moved</span>
-                </div>
-              </div>
+              </section>
 
-              <div id="fuel-note" class="fuel-note"></div>
-            </section>
-          </div>
-
-          <!-- Upload section (FR-1 / FR-4) -->
-          <section id="upload-card" class="card upload">
-            <h2 class="upload-title">Upload</h2>
-            <div class="upload-zones">
-              <div class="upload-zone-wrapper">
-                <span class="upload-zone-label">CommBank CSV</span>
-                <div
-                  id="dropzone-commbank"
-                  class="dropzone"
-                  tabindex="0"
-                  role="button"
-                  aria-label="Drop CommBank CSV here or click to browse"
-                >
-                  <span class="dropzone-hint">Drop CSV here or click to browse</span>
-                  <span id="filename-commbank" class="filename"></span>
+              <!-- Fuel-stop reclassify card -->
+              <section class="card fuel-card">
+                <div class="fuel-card-head">
+                  <div class="fuel-card-title-block">
+                    <div class="fuel-card-title">
+                      <span class="swatch swatch--transport"></span>&rarr;<span
+                        class="swatch swatch--dining"
+                      ></span>
+                      Small servo spends
+                    </div>
+                    <p class="fuel-card-desc">
+                      Count purchases <strong>under $10</strong> at fuel &amp; convenience stops
+                      (BP, 7-Eleven, Ampol, Shell, Caltex, Coles Express, Reddy Express) as
+                      <strong>Dining Out</strong> instead of Transport — that&rsquo;s usually a
+                      coffee or a pie, not fuel.
+                    </p>
+                  </div>
+                  <label class="fuel-switch" for="fuel-rule-toggle">
+                    <input id="fuel-rule-toggle" type="checkbox" />
+                    <span class="fuel-switch-track"><span class="knob"></span></span>
+                  </label>
                 </div>
-                <input id="file-commbank" type="file" accept=".csv" hidden />
-              </div>
 
-              <div class="upload-zone-wrapper">
-                <span class="upload-zone-label">Westpac CSV</span>
-                <div
-                  id="dropzone-westpac"
-                  class="dropzone"
-                  tabindex="0"
-                  role="button"
-                  aria-label="Drop Westpac CSV here or click to browse"
-                >
-                  <span class="dropzone-hint">Drop CSV here or click to browse</span>
-                  <span id="filename-westpac" class="filename"></span>
+                <div class="fuel-card-divider"></div>
+
+                <div class="fuel-card-rows">
+                  <div class="fuel-card-row">
+                    <span>Fuel &amp; snacks over $10</span>
+                    <span class="fuel-card-row-value">Stays Transport</span>
+                  </div>
+                  <div class="fuel-card-row">
+                    <span>Travel-only fares <span class="muted-inline">(Opal, Myki, SkyBus)</span></span>
+                    <span class="fuel-card-row-value">Never moved</span>
+                  </div>
                 </div>
-                <input id="file-westpac" type="file" accept=".csv" hidden />
-              </div>
+
+                <div id="fuel-note" class="fuel-note"></div>
+              </section>
             </div>
+          </section>
 
-            <button id="upload-submit" type="button" class="upload-btn">Upload</button>
-            <p id="upload-status" class="upload-status" role="status" aria-live="polite"></p>
+          <!-- Upload view (FR-1 / FR-4) -->
+          <section class="view" data-view="upload" hidden>
+            <section id="upload-card" class="card upload">
+              <h2 class="upload-title">Upload</h2>
+              <div class="upload-zones">
+                <div class="upload-zone-wrapper">
+                  <span class="upload-zone-label">CommBank CSV</span>
+                  <div
+                    id="dropzone-commbank"
+                    class="dropzone"
+                    tabindex="0"
+                    role="button"
+                    aria-label="Drop CommBank CSV here or click to browse"
+                  >
+                    <span class="dropzone-hint">Drop CSV here or click to browse</span>
+                    <span id="filename-commbank" class="filename"></span>
+                  </div>
+                  <input id="file-commbank" type="file" accept=".csv" hidden />
+                </div>
+
+                <div class="upload-zone-wrapper">
+                  <span class="upload-zone-label">Westpac CSV</span>
+                  <div
+                    id="dropzone-westpac"
+                    class="dropzone"
+                    tabindex="0"
+                    role="button"
+                    aria-label="Drop Westpac CSV here or click to browse"
+                  >
+                    <span class="dropzone-hint">Drop CSV here or click to browse</span>
+                    <span id="filename-westpac" class="filename"></span>
+                  </div>
+                  <input id="file-westpac" type="file" accept=".csv" hidden />
+                </div>
+              </div>
+
+              <button id="upload-submit" type="button" class="upload-btn">Upload</button>
+              <p id="upload-status" class="upload-status" role="status" aria-live="polite"></p>
+            </section>
+          </section>
+
+          <!-- Category context view -->
+          <section class="view" data-view="context" hidden>
+            <div class="context-layout">
+              <section class="context-cards-col">
+                <div class="context-cards-head">
+                  <button id="save-context" type="button" class="save-context-btn">
+                    Save context
+                  </button>
+                </div>
+                <div id="category-cards" class="category-cards"></div>
+              </section>
+            </div>
+            <p id="context-status" class="context-status" role="status" aria-live="polite"></p>
           </section>
         </div>
       </div>

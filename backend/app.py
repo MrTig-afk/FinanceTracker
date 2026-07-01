@@ -5,6 +5,8 @@ Endpoints
 POST /upload    Accept CommBank and/or Westpac CSVs as multipart form fields.
 GET  /status    Health + last-run summary (no sensitive content).
 GET  /summary   Monthly spending totals (latest or ?month=YYYY-MM).
+GET  /category-context  The 9 canonical categories with stored hints (D1/D2).
+PUT  /category-context  Replace-all of the 9 canonical categories' hints.
 
 Privacy contract
 ----------------
@@ -42,6 +44,7 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from backend.data_source import Bank
 from backend.drive_uploader import is_configured
@@ -104,9 +107,23 @@ app = FastAPI(lifespan=lifespan, title="FinanceTracker")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models — category-context PUT body
+# ---------------------------------------------------------------------------
+
+
+class CategoryHintsIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)   # must be a canonical taxonomy name
+    hints: str = Field(default="", max_length=2000)
+
+
+class CategoryContextIn(BaseModel):
+    categories: list[CategoryHintsIn]
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +275,47 @@ async def reclassify(
         store.revert_fuel_dining_rule(month)
 
     return store.summary(month)
+
+
+# ---------------------------------------------------------------------------
+# GET/PUT /category-context  (D1 fixed taxonomy / D2 pre-filled example hints)
+# ---------------------------------------------------------------------------
+
+
+def _category_context_response() -> dict:
+    """Serialise the store's 9 canonical categories in the GET/PUT response shape."""
+    return {
+        "categories": [
+            {
+                "name": c.name,
+                "color": c.color,
+                "hints": c.hints,
+                "position": c.position,
+            }
+            for c in app.state.store.get_category_context()
+        ]
+    }
+
+
+@app.get("/category-context")
+async def get_category_context():
+    """Return the 9 canonical categories with stored hints (seeded example hints
+    on a fresh DB). Local serve to the owner's own client — same posture as /summary.
+    """
+    return _category_context_response()
+
+
+@app.put("/category-context")
+async def put_category_context(body: CategoryContextIn):
+    """Replace-all of the 9 canonical categories' hints.
+
+    Names not in TAXONOMY are ignored by the store — the fixed 9 categories are
+    always what gets written (D1). Returns the freshly-stored list in the same
+    shape as GET.
+    """
+    hints_by_name = {c.name: c.hints for c in body.categories}
+    app.state.store.save_category_context(hints_by_name)
+    return _category_context_response()
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,14 @@
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { fetchSummary, fetchStatus, postReclassify, ApiError } from './api.js';
+import {
+  fetchSummary,
+  fetchStatus,
+  postReclassify,
+  fetchCategoryContext,
+  saveCategoryContext,
+  ApiError,
+} from './api.js';
 
 // ---------------------------------------------------------------------------
 // Synthetic canned response — no real amounts, no real categories.
@@ -155,6 +162,88 @@ describe('postReclassify', () => {
   it('rejects with ApiError (not raw TypeError) on network failure', async () => {
     vi.stubGlobal('fetch', makeNetworkFailFetch());
     const err = await postReclassify(true).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchCategoryContext / saveCategoryContext (SYNTHETIC hints only)
+// ---------------------------------------------------------------------------
+
+const CANNED_CONTEXT = {
+  categories: [
+    { name: 'Groceries', color: '#57b26f', hints: 'SYNTH HINT A', position: 0 },
+    { name: 'Utilities', color: '#4a90d9', hints: 'SYNTH HINT B', position: 1 },
+  ],
+};
+
+describe('fetchCategoryContext', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_CONTEXT));
+    const result = await fetchCategoryContext();
+    expect(result).toEqual(CANNED_CONTEXT);
+  });
+
+  it('GETs the /category-context URL', async () => {
+    const mockFetch = makeOkFetch(CANNED_CONTEXT);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchCategoryContext();
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/category-context');
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(fetchCategoryContext()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchCategoryContext().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+describe('saveCategoryContext', () => {
+  it('resolves to the updated categories JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_CONTEXT));
+    const result = await saveCategoryContext([{ name: 'Groceries', hints: 'SYNTH HINT A' }]);
+    expect(result).toEqual(CANNED_CONTEXT);
+  });
+
+  it('PUTs to /category-context with JSON {categories}', async () => {
+    const mockFetch = makeOkFetch(CANNED_CONTEXT);
+    vi.stubGlobal('fetch', mockFetch);
+    await saveCategoryContext([{ name: 'Groceries', hints: 'SYNTH HINT A' }]);
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/category-context');
+    expect(options.method).toBe('PUT');
+    expect(options.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    const body = JSON.parse(options.body);
+    expect(body).toEqual({ categories: [{ name: 'Groceries', hints: 'SYNTH HINT A' }] });
+  });
+
+  it('drops extraneous fields (color/position) from each item', async () => {
+    const mockFetch = makeOkFetch(CANNED_CONTEXT);
+    vi.stubGlobal('fetch', mockFetch);
+    await saveCategoryContext([
+      { name: 'Groceries', hints: 'SYNTH HINT A', color: '#57b26f', position: 0 },
+    ]);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.categories[0]).toEqual({ name: 'Groceries', hints: 'SYNTH HINT A' });
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(422));
+    await expect(saveCategoryContext([{ name: 'Groceries', hints: 'x' }])).rejects.toBeInstanceOf(
+      ApiError,
+    );
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await saveCategoryContext([{ name: 'Groceries', hints: 'x' }]).catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
   });
 });

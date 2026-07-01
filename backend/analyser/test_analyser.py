@@ -13,8 +13,16 @@ from decimal import Decimal
 import pytest
 
 from backend.sanitiser import SanitisedTxn, SanitiseResult
-from backend.analyser import categorise, OpenRouterClient, AnalysisResult, AnalyserError
+from backend.analyser import (
+    categorise,
+    build_context_prompt,
+    OpenRouterClient,
+    AnalysisResult,
+    AnalyserError,
+)
+from backend.analyser.analyser import build_prompt
 from backend.analyser.parse import extract_json_object
+from backend.store import CategoryContext
 
 # ---------------------------------------------------------------------------
 # Synthetic payload — invented merchants; never real data
@@ -1027,3 +1035,104 @@ class TestFlaggedValidation:
         result = categorise(sr, client=_make_client(recorder))
 
         assert result.flagged == []
+
+
+# ---------------------------------------------------------------------------
+# build_context_prompt — golden-string fixture (SYNTHETIC; shared cross-language
+# pin with the JS mirror in frontend/src/categoryContext.test.js — keep both
+# byte-identical).
+# ---------------------------------------------------------------------------
+
+# SYNTHETIC categories — invented hint strings, NOT the D2 defaults and NOT any
+# transaction text. color/position values are irrelevant to build_context_prompt.
+_GOLDEN_CATEGORIES = (
+    CategoryContext(
+        name="Alpha", color="#111111", hints="SYNTH GROCER A, SYNTH GROCER B", position=0
+    ),
+    CategoryContext(name="Beta", color="#222222", hints="   ", position=1),
+    CategoryContext(
+        name="Gamma", color="#333333", hints="SYNTH  MULTI   SPACE\n\nHINT", position=2
+    ),
+)
+
+# Byte-identical to the JS golden fixture asserted in categoryContext.test.js.
+_GOLDEN_PROMPT = (
+    "TAXONOMY & CONTEXT\n"
+    "------------------\n"
+    "- Alpha\n"
+    "    SYNTH GROCER A, SYNTH GROCER B\n"
+    "\n"
+    "- Beta\n"
+    "    (no extra context)\n"
+    "\n"
+    "- Gamma\n"
+    "    SYNTH MULTI SPACE HINT"
+)
+
+
+class TestBuildContextPromptGolden:
+    """build_context_prompt golden-string assertion (SYNTHETIC fixture, D1/D2)."""
+
+    def test_golden_string_matches_exactly(self):
+        assert build_context_prompt(_GOLDEN_CATEGORIES) == _GOLDEN_PROMPT
+
+    def test_empty_hints_become_no_extra_context(self):
+        assert "(no extra context)" in build_context_prompt(_GOLDEN_CATEGORIES)
+
+    def test_multi_space_and_newline_hints_collapsed_and_trimmed(self):
+        result = build_context_prompt(_GOLDEN_CATEGORIES)
+        assert "SYNTH MULTI SPACE HINT" in result
+        assert "SYNTH  MULTI" not in result  # original double space must be gone
+        assert "\n\nHINT" not in result      # original blank-line break must be gone
+
+    def test_header_then_separator_then_first_entry(self):
+        result = build_context_prompt(_GOLDEN_CATEGORIES)
+        assert result.startswith("TAXONOMY & CONTEXT\n------------------\n- Alpha")
+
+    def test_categories_joined_by_blank_line(self):
+        result = build_context_prompt(_GOLDEN_CATEGORIES)
+        assert "\n\n- Beta" in result
+        assert "\n\n- Gamma" in result
+
+    def test_empty_list_is_header_only_form(self):
+        assert build_context_prompt([]) == "TAXONOMY & CONTEXT\n------------------\n"
+
+
+# ---------------------------------------------------------------------------
+# build_prompt — context_preamble prepend (analyser.py)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPromptContextPrepend:
+    """build_prompt(payload, context_preamble=P) prepends P + blank line to system_prompt."""
+
+    def test_preamble_prepended_with_blank_line(self):
+        system_prompt, _ = build_prompt(PAYLOAD, context_preamble=_GOLDEN_PROMPT)
+        assert system_prompt.startswith(_GOLDEN_PROMPT + "\n\n")
+
+    def test_base_prompt_follows_preamble(self):
+        system_prompt, _ = build_prompt(PAYLOAD, context_preamble=_GOLDEN_PROMPT)
+        base_system, _ = build_prompt(PAYLOAD, context_preamble="")
+        assert system_prompt == _GOLDEN_PROMPT + "\n\n" + base_system
+
+    def test_empty_preamble_leaves_system_prompt_unchanged(self):
+        with_empty, _ = build_prompt(PAYLOAD, context_preamble="")
+        without_arg, _ = build_prompt(PAYLOAD)
+        assert with_empty == without_arg
+
+    def test_whitespace_only_preamble_leaves_system_prompt_unchanged(self):
+        with_ws, _ = build_prompt(PAYLOAD, context_preamble="   \n  ")
+        without_arg, _ = build_prompt(PAYLOAD)
+        assert with_ws == without_arg
+
+    def test_user_prompt_identical_regardless_of_preamble(self):
+        _, user_with = build_prompt(PAYLOAD, context_preamble=_GOLDEN_PROMPT)
+        _, user_without = build_prompt(PAYLOAD, context_preamble="")
+        assert user_with == user_without
+
+    def test_user_prompt_contains_only_three_allowed_keys(self):
+        """BLOCKING: user_prompt still parses to only the sanctioned three keys."""
+        _, user_prompt = build_prompt(PAYLOAD, context_preamble=_GOLDEN_PROMPT)
+        items = json.loads(user_prompt)
+        for item in items:
+            assert set(item.keys()) == {"row_index", "cleaned_description", "amount"}

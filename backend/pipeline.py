@@ -37,7 +37,7 @@ from backend.idempotency import (
     transaction_fingerprint,
 )
 from backend.sanitiser import sanitise
-from backend.analyser import categorise
+from backend.analyser import categorise, build_context_prompt
 from backend.store import Store
 from backend.excel_builder import build_workbook
 from backend.drive_uploader import upload_file
@@ -209,8 +209,14 @@ def run_pipeline(
     # Sanitise before any off-machine call — fail-closed (FR-16..FR-21).
     sresult = sanitise(to_categorise, audit=True, log_dir=sanitise_log_dir)
 
+    # Build the "TAXONOMY & CONTEXT" preamble from the owner's stored category
+    # hints (local-only data — never transaction text) and prepend it to the
+    # system prompt. The pipeline owns the Store, so it builds this here to keep
+    # the analyser decoupled from Store (it only ever receives strings).
+    preamble = build_context_prompt(store.get_category_context())
+
     # categorise() short-circuits with zero HTTP calls when sresult.payload is empty.
-    analysis = categorise(sresult, client=analyser_client)
+    analysis = categorise(sresult, client=analyser_client, context_preamble=preamble)
 
     # Map row_index (position in to_categorise) back to fingerprint so set_categories
     # can write by fingerprint key.  sanitise() assigns row_index = enumerate position.

@@ -28,21 +28,27 @@ from .models import AnalysisResult
 # Prompt builder
 # ---------------------------------------------------------------------------
 
-def build_prompt(payload: Sequence[SanitisedTxn]) -> tuple[str, str]:
+def build_prompt(
+    payload: Sequence[SanitisedTxn], *, context_preamble: str = ""
+) -> tuple[str, str]:
     """Return (system_prompt, user_prompt) built ONLY from sanitised tuples.
 
     system_prompt
         Static instruction string.  The category list is derived from the imported
         TAXONOMY tuple — one source of truth; the words are never hardcoded again.
+        When context_preamble is non-blank, it is prepended followed by a blank
+        line; an empty/whitespace-only preamble leaves system_prompt unchanged
+        (back-compat).
 
     user_prompt
         A JSON array of objects, each containing exactly:
         ``{"row_index": int, "cleaned_description": str, "amount": str}``
-        This is the entire set of data that travels off-machine.
+        This is the entire set of data that travels off-machine. Unaffected by
+        context_preamble.
     """
     taxonomy_labels = ", ".join(TAXONOMY)
 
-    system_prompt = (
+    base_system = (
         "You are a financial transaction categoriser. "
         f"Categorise each transaction into exactly one of these categories: {taxonomy_labels}. "
         "Use the exact category spelling. "
@@ -58,6 +64,11 @@ def build_prompt(payload: Sequence[SanitisedTxn]) -> tuple[str, str]:
         "Note: any category_totals field you include will be ignored; "
         "totals are always computed locally."
     )
+
+    if context_preamble.strip():
+        system_prompt = context_preamble + "\n\n" + base_system
+    else:
+        system_prompt = base_system
 
     # user_prompt: exactly (row_index, cleaned_description, amount) — nothing else.
     # SanitisedTxn has no other fields, so raw data cannot leak structurally.
@@ -82,11 +93,18 @@ def categorise(
     result: SanitiseResult | Sequence[SanitisedTxn],
     *,
     client: OpenRouterClient | None = None,
+    context_preamble: str = "",
 ) -> AnalysisResult:
     """Categorise a sanitised batch of transactions using the LLM via OpenRouter.
 
     Accepts either a SanitiseResult (from the sanitiser stage) or a plain sequence
     of SanitisedTxn objects.  NEVER accepts raw Transaction data.
+
+    context_preamble
+        Optional "TAXONOMY & CONTEXT" preamble (built by
+        backend.analyser.build_context_prompt from the owner's stored category
+        hints) prepended to the system prompt. Never affects user_prompt, which
+        still contains only (row_index, cleaned_description, amount).
 
     Empty payload → returns empty AnalysisResult with ZERO HTTP calls (FR-15).
     Category totals are computed LOCALLY; LLM-supplied totals are ignored.
@@ -126,7 +144,7 @@ def categorise(
     # ------------------------------------------------------------------
     # Step 4: Build prompt from sanitised tuples only
     # ------------------------------------------------------------------
-    system_prompt, user_prompt = build_prompt(payload)
+    system_prompt, user_prompt = build_prompt(payload, context_preamble=context_preamble)
 
     # ------------------------------------------------------------------
     # Step 5: Call the LLM — AnalyserError propagates to the caller
