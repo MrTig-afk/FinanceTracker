@@ -9,6 +9,8 @@
 import { buildUploadForm, postUpload, isCsvFile, UploadValidationError } from './upload.js';
 import { ApiError } from './api.js';
 
+const AUTO_SWITCH_DELAY_MS = 1500;
+
 /**
  * Wire the upload UI region to the queue and dashboard refresh callback.
  *
@@ -22,6 +24,8 @@ import { ApiError } from './api.js';
  *   root?: Document,
  *   queue: object,           // createQueue() instance
  *   onUploaded?: () => Promise<void>,  // called after a successful upload
+ *   onUploadSuccess?: () => void,  // called ~1.5s after a successful upload to
+ *                                  // switch to the Overview view.
  *   postFn?: (form: FormData) => Promise<object>,  // injectable for tests
  * }} options
  * @returns {{ destroy(): void }}
@@ -30,6 +34,7 @@ export function createUploadController({
   root = document,
   queue,
   onUploaded,
+  onUploadSuccess,
   postFn,
 } = {}) {
   const _postFn = postFn ?? ((form) => postUpload(form));
@@ -53,6 +58,7 @@ export function createUploadController({
 
   // --- Listener registry (for cleanup) -------------------------------------
   const _listeners = [];
+  let _switchTimer = null;
 
   function _on(el, event, handler) {
     if (!el) return;
@@ -156,6 +162,15 @@ export function createUploadController({
       _setSlot('westpac', null);
       _setStatus('Uploaded — processing.');
       if (onUploaded) await onUploaded();
+
+      if (onUploadSuccess) {
+        const uploadSection = root.querySelector('section.view[data-view="upload"]');
+        _switchTimer = setTimeout(() => {
+          _switchTimer = null;
+          // Nice-to-have guard: only jump if the user is still on the Upload view.
+          if (!uploadSection || !uploadSection.hidden) onUploadSuccess();
+        }, AUTO_SWITCH_DELAY_MS);
+      }
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.status === null && err.cause != null) {
@@ -189,6 +204,10 @@ export function createUploadController({
       el.removeEventListener(event, handler);
     }
     _listeners.length = 0;
+    if (_switchTimer !== null) {
+      clearTimeout(_switchTimer);
+      _switchTimer = null;
+    }
   }
 
   return { destroy };

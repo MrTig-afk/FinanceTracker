@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="FinanceTracker">
+  <title>FinanceTracker mark</title>
+  
+  <g fill="none" stroke-width="9" stroke-linecap="butt">
+    <circle cx="32" cy="32" r="24" stroke="#57b26f" stroke-dasharray="19.27 131.5" transform="rotate(-83 32 32)"></circle>
+    <circle cx="32" cy="32" r="24" stroke="#4a90d9" stroke-dasharray="19.27 131.5" transform="rotate(-23 32 32)"></circle>
+    <circle cx="32" cy="32" r="24" stroke="#9b6cd4" stroke-dasharray="19.27 131.5" transform="rotate(37 32 32)"></circle>
+    <circle cx="32" cy="32" r="24" stroke="#e0913f" stroke-dasharray="19.27 131.5" transform="rotate(97 32 32)"></circle>
+    <circle cx="32" cy="32" r="24" stroke="#34a7a3" stroke-dasharray="19.27 131.5" transform="rotate(157 32 32)"></circle>
+    <circle cx="32" cy="32" r="24" stroke="#d96ba6" stroke-dasharray="19.27 131.5" transform="rotate(217 32 32)"></circle>
+  </g>
+</svg>

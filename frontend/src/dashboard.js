@@ -50,6 +50,9 @@ export function createDashboard(root = document) {
   /** @type {Chart|null} */
   let chartInstance = null;
 
+  /** Index of the currently-hovered arc/legend row (arc<->legend symmetric highlight). */
+  let hoveredIndex = null;
+
   /** Cached for applyChartTheme() and for the count-up baseline of the next render. */
   let lastSummary = null;
   let lastDisplayedTotal = 0;
@@ -66,6 +69,7 @@ export function createDashboard(root = document) {
       chartInstance.destroy();
       chartInstance = null;
     }
+    hoveredIndex = null;
   }
 
   function _clearLegend() {
@@ -151,6 +155,24 @@ export function createDashboard(root = document) {
     });
   }
 
+  /**
+   * Shared arc<->legend highlight: sets both (a) the active/lifted chart arc
+   * and (b) the matching legend row's `.is-hover` class, so hovering either
+   * one produces the same symmetric visible pair. Passing `null` clears both.
+   */
+  function _setHighlight(index) {
+    const idx = index === null || index === undefined ? null : index;
+    if (idx === hoveredIndex) return; // guard: no redundant chart.update() on mousemove
+    hoveredIndex = idx;
+    // (a) lift/emphasise the matching arc
+    if (chartInstance) {
+      chartInstance.setActiveElements(idx === null ? [] : [{ datasetIndex: 0, index: idx }]);
+      chartInstance.update();
+    }
+    // (b) highlight the matching legend row
+    _highlightLegendFromArc(idx);
+  }
+
   function _renderLegend(data, total) {
     _clearLegend();
     if (!legendEl) return;
@@ -164,20 +186,13 @@ export function createDashboard(root = document) {
 
       const rowEl = document.createElement('div');
       rowEl.className = 'legend-row';
-      rowEl.style.setProperty('--hl', `color-mix(in srgb, ${color} 20%, transparent)`);
+      rowEl.style.setProperty('--hl', `color-mix(in srgb, ${color} 38%, transparent)`);
+      rowEl.style.setProperty('--hl-ring', `color-mix(in srgb, ${color} 65%, transparent)`);
       rowEl.style.animationDelay = `${i * 55}ms`;
       rowEl.dataset.category = label;
 
-      rowEl.addEventListener('mouseenter', () => {
-        if (!chartInstance) return;
-        chartInstance.setActiveElements([{ datasetIndex: 0, index: i }]);
-        chartInstance.update();
-      });
-      rowEl.addEventListener('mouseleave', () => {
-        if (!chartInstance) return;
-        chartInstance.setActiveElements([]);
-        chartInstance.update();
-      });
+      rowEl.addEventListener('mouseenter', () => _setHighlight(i));
+      rowEl.addEventListener('mouseleave', () => _setHighlight(null));
 
       const top = document.createElement('div');
       top.className = 'legend-row-top';
@@ -321,6 +336,7 @@ export function createDashboard(root = document) {
 
   function _renderChart(data) {
     _destroyChart();
+    hoveredIndex = null;
     if (!canvas) return;
 
     chartInstance = new Chart(canvas, {
@@ -333,7 +349,8 @@ export function createDashboard(root = document) {
             backgroundColor: data.colors,
             borderColor: _currentSurfaceColor(),
             borderWidth: 3,
-            hoverOffset: 7,
+            hoverOffset: 18,
+            hoverBorderWidth: 4,
           },
         ],
       },
@@ -347,12 +364,15 @@ export function createDashboard(root = document) {
           duration: 900,
           easing: 'easeInOutQuart',
         },
+        // Snappier than the default 400ms hover animation so the pop-out reads
+        // as an immediate, deliberate response rather than a slow drift.
+        hover: { animationDuration: 160 },
         plugins: {
           legend: { display: false },
           tooltip: { enabled: false },
         },
         onHover(event, elements) {
-          _highlightLegendFromArc(elements && elements.length ? elements[0].index : null);
+          _setHighlight(elements && elements.length ? elements[0].index : null);
         },
       },
     });
