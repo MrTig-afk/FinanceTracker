@@ -10,6 +10,8 @@ import { createQueue } from './queue.js';
 import { createUploadController } from './uploadController.js';
 import { postUpload } from './upload.js';
 import { initTheme } from './theme.js';
+import { initViews } from './views.js';
+import { createCategoryContext } from './categoryContextController.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -125,5 +127,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  load();
+  // -------------------------------------------------------------------------
+  // View switching — Overview / Upload / Category context / (History, Settings
+  // stay inert). Lazy-create the category-context controller on first switch;
+  // re-run the dashboard load() whenever Overview is shown. initViews() shows
+  // the default (Overview) view synchronously, which fires onShow('overview')
+  // and triggers the initial load() below — no separate call needed.
+  // -------------------------------------------------------------------------
+  let categoryContext = null;
+
+  initViews({
+    root: document,
+    onShow(view) {
+      if (view === 'overview') {
+        load();
+      } else if (view === 'context') {
+        if (!categoryContext) {
+          categoryContext = createCategoryContext({ root: document });
+        }
+        categoryContext.load();
+      }
+    },
+  });
 });

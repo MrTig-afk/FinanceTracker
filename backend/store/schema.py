@@ -29,6 +29,16 @@ CREATE TABLE IF NOT EXISTS file_fingerprints (
     fingerprint  TEXT PRIMARY KEY,
     processed_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS category_context (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    color       TEXT NOT NULL,
+    hints       TEXT NOT NULL DEFAULT '',
+    position    INTEGER NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ctx_position ON category_context(position);
 """
 
 

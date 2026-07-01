@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 
 from backend.idempotency import NewTxnResult
 
+from .category_context import CategoryContext, DEFAULT_CONTEXT
 from .fuel_rule import is_fuel_convenience
 from .schema import init_schema as _schema_init
 from .taxonomy import coerce_category
@@ -173,6 +174,7 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         _schema_init(self.conn)
+        self._seed_category_context_if_empty()
 
     # ------------------------------------------------------------------
     # Context manager
@@ -198,6 +200,69 @@ class Store:
     def init_schema(self) -> None:
         """Re-run the DDL against this connection; idempotent (CREATE TABLE IF NOT EXISTS)."""
         _schema_init(self.conn)
+
+    # ------------------------------------------------------------------
+    # Category context (D1 fixed taxonomy / D2 pre-filled example hints)
+    # ------------------------------------------------------------------
+
+    def _seed_category_context_if_empty(self) -> None:
+        """Insert the 9 DEFAULT_CONTEXT rows when category_context is empty.
+
+        Idempotent: only seeds an empty table, so a pre-existing DB is never
+        re-seeded or duplicated. Runs for :memory:, tmp_path, and production DBs.
+        """
+        (count,) = self.conn.execute("SELECT COUNT(*) FROM category_context").fetchone()
+        if count:
+            return
+
+        now = _utc_now_iso()
+        self.conn.executemany(
+            "INSERT INTO category_context(name, color, hints, position, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(c.name, c.color, c.hints, c.position, now) for c in DEFAULT_CONTEXT],
+        )
+        self.conn.commit()
+
+    def get_category_context(self) -> list[CategoryContext]:
+        """Return the 9 canonical categories ordered by position, with stored hints.
+
+        After seeding, the table always has the 9 rows.
+        """
+        rows = self.conn.execute(
+            "SELECT name, color, hints, position FROM category_context ORDER BY position"
+        ).fetchall()
+        return [
+            CategoryContext(
+                name=row["name"],
+                color=row["color"],
+                hints=row["hints"],
+                position=row["position"],
+            )
+            for row in rows
+        ]
+
+    def save_category_context(self, hints_by_name: dict[str, str]) -> int:
+        """Replace-all: rebuild the 9 canonical rows with hints from hints_by_name.
+
+        name/color/position always come from DEFAULT_CONTEXT (canonical seed).
+        Unknown names in hints_by_name are ignored; canonical names absent from
+        the dict get hints=''. Never adds or removes categories (D1) — the table
+        always ends up with exactly the 9 canonical rows. DELETE + INSERT in one
+        transaction; commits once. Returns the number of rows written (9).
+        """
+        now = _utc_now_iso()
+        rows = [
+            (c.name, c.color, hints_by_name.get(c.name, ""), c.position, now)
+            for c in DEFAULT_CONTEXT
+        ]
+        self.conn.execute("DELETE FROM category_context")
+        self.conn.executemany(
+            "INSERT INTO category_context(name, color, hints, position, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+        self.conn.commit()
+        return len(rows)
 
     # ------------------------------------------------------------------
     # Layer 1: file fingerprints (FR-12)

@@ -24,6 +24,7 @@ opened and no file is created by a bare ``import backend.store``.
 """
 from __future__ import annotations
 
+from .category_context import CategoryContext, DEFAULT_CONTEXT
 from .schema import init_schema
 from .store import (
     MonthRow,
@@ -48,6 +49,9 @@ __all__ = [
     "TAXONOMY",
     "OTHER",
     "coerce_category",
+    # Category context (D1 fixed taxonomy / D2 pre-filled example hints)
+    "CategoryContext",
+    "DEFAULT_CONTEXT",
     # Money helpers — same convention as audit.py; useful to Excel builder and tests
     "amount_to_text",
     "amount_from_text",
