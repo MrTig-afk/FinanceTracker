@@ -429,6 +429,8 @@ class TestSummaryCorrectness:
             "net": "0.00",
             "count": 0,
             "fuel_rule_applied": False,
+            "fuel_rule_eligible": 0,
+            "fuel_rule_eligible_amount": "0.00",
         }
 
     def test_summary_mixed_income_and_expense(self) -> None:
@@ -469,6 +471,61 @@ class TestSummaryCorrectness:
         assert jun_result["year_month"] == "2026-06"
         assert jun_result["count"] == 1
         assert jun_result["net"] == "-75.00"
+
+    def test_summary_fuel_rule_eligible_counts_under_10_fuel(self) -> None:
+        """fuel_rule_eligible counts only under-$10 fuel/convenience Transport rows.
+
+        A fuel token under $10 is eligible; a fuel token over $10 is not; a
+        non-fuel/travel token under $10 is not.
+        """
+        t_small_fuel = _txn("SYNTH BP STOP", amount="-8.00", d=date(2026, 6, 1))
+        t_big_fuel = _txn("SYNTH BP FILLUP", amount="-65.00", d=date(2026, 6, 2))
+        t_small_travel = _txn("SYNTH OPAL TRAVEL", amount="-3.00", d=date(2026, 6, 3))
+        r = _result(t_small_fuel, t_big_fuel, t_small_travel)
+
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({fp: "Transport" for fp in r.fingerprints})
+            result = store.summary("2026-06")
+
+        assert result["fuel_rule_eligible"] == 1
+        assert result["fuel_rule_eligible_amount"] == "-8.00"
+
+    def test_summary_fuel_rule_eligible_stable_after_apply(self) -> None:
+        """fuel_rule_eligible is unchanged whether the rule has been applied or not."""
+        t_small_fuel = _txn("SYNTH BP STOP", amount="-8.00", d=date(2026, 6, 1))
+        t_big_fuel = _txn("SYNTH BP FILLUP", amount="-65.00", d=date(2026, 6, 2))
+        t_small_travel = _txn("SYNTH OPAL TRAVEL", amount="-3.00", d=date(2026, 6, 3))
+        r = _result(t_small_fuel, t_big_fuel, t_small_travel)
+
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({fp: "Transport" for fp in r.fingerprints})
+            before = store.summary("2026-06")
+
+            store.apply_fuel_dining_rule("2026-06")
+            after = store.summary("2026-06")
+
+        assert before["fuel_rule_eligible"] == after["fuel_rule_eligible"] == 1
+        assert before["fuel_rule_eligible_amount"] == after["fuel_rule_eligible_amount"] == "-8.00"
+        assert after["fuel_rule_applied"] is True
+
+    def test_summary_fuel_rule_eligible_zero_when_none(self) -> None:
+        """A month with no eligible rows reports 0 count and a '0.00' amount."""
+        t_big_fuel = _txn("SYNTH BP FILLUP", amount="-65.00", d=date(2026, 6, 1))
+        t_grocery = _txn("SYNTH GROCER", amount="-20.00", d=date(2026, 6, 2))
+        r = _result(t_big_fuel, t_grocery)
+
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Transport",
+                r.fingerprints[1]: "Groceries",
+            })
+            result = store.summary("2026-06")
+
+        assert result["fuel_rule_eligible"] == 0
+        assert result["fuel_rule_eligible_amount"] == "0.00"
 
 
 # ---------------------------------------------------------------------------

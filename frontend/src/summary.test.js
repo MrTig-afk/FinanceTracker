@@ -13,6 +13,7 @@ import {
   categoryRows,
   computeNet,
   monthLabel,
+  spendTotal,
 } from './summary.js';
 
 // ---------------------------------------------------------------------------
@@ -263,6 +264,36 @@ describe('colorFor', () => {
       expect(CATEGORY_COLORS).toHaveProperty(key);
       expect(typeof CATEGORY_COLORS[key]).toBe('string');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spendTotal
+// ---------------------------------------------------------------------------
+
+describe('spendTotal', () => {
+  it('sums the expense magnitudes (Groceries + Dining Out + Transport + Uncategorised)', () => {
+    expect(spendTotal(SUMMARY)).toBeCloseTo(123.45 + 67.8 + 200 + 12);
+  });
+
+  it('excludes Income from the sum', () => {
+    const incomeOnly = {
+      year_month: '2026-06',
+      totals: { Income: '5000.00' },
+      net: '5000.00',
+      count: 1,
+    };
+    expect(spendTotal(incomeOnly)).toBe(0);
+  });
+
+  it('returns 0 for an EMPTY summary', () => {
+    expect(spendTotal(EMPTY)).toBe(0);
+  });
+
+  it('matches the sum of toChartData(summary).values', () => {
+    const { values } = toChartData(SUMMARY);
+    const total = values.reduce((s, v) => s + v, 0);
+    expect(spendTotal(SUMMARY)).toBeCloseTo(total);
   });
 });
 

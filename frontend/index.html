@@ -4,93 +4,164 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FinanceTracker</title>
+
+    <!-- Design-asset fonts only — no transaction data crosses this request. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#3f51b5" />
+    <meta name="theme-color" content="#3d9a6f" />
     <link rel="icon" href="/icon.svg" />
   </head>
   <body>
     <div id="app">
-      <header class="site-header">
-        <h1 class="site-title">FinanceTracker</h1>
-        <span id="status-dot" class="status-dot" title="Backend status unknown"></span>
-        <button id="refresh" type="button" class="refresh-btn">Refresh</button>
-      </header>
-
-      <div class="summary-bar">
-        <h2 id="month-label" class="month-label"></h2>
-        <div id="net-value" class="net-value"></div>
-      </div>
-
-      <!-- Upload section (FR-1 / FR-4) — must appear above the dashboard. -->
-      <section class="upload">
-        <div class="upload-zones">
-          <div class="upload-zone-wrapper">
-            <span class="upload-zone-label">CommBank CSV</span>
-            <div
-              id="dropzone-commbank"
-              class="dropzone"
-              tabindex="0"
-              role="button"
-              aria-label="Drop CommBank CSV here or click to browse"
-            >
-              <span class="dropzone-hint">Drop CSV here or click to browse</span>
-              <span id="filename-commbank" class="filename"></span>
-            </div>
-            <input id="file-commbank" type="file" accept=".csv" hidden />
-          </div>
-
-          <div class="upload-zone-wrapper">
-            <span class="upload-zone-label">Westpac CSV</span>
-            <div
-              id="dropzone-westpac"
-              class="dropzone"
-              tabindex="0"
-              role="button"
-              aria-label="Drop Westpac CSV here or click to browse"
-            >
-              <span class="dropzone-hint">Drop CSV here or click to browse</span>
-              <span id="filename-westpac" class="filename"></span>
-            </div>
-            <input id="file-westpac" type="file" accept=".csv" hidden />
-          </div>
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <span class="brand-dot" aria-hidden="true"></span>
+          <span class="brand-name">FinanceTracker</span>
         </div>
 
-        <button id="upload-submit" type="button" class="upload-btn">Upload</button>
-        <p
-          id="upload-status"
-          class="upload-status"
-          role="status"
-          aria-live="polite"
-        ></p>
-      </section>
+        <nav class="sidebar-nav">
+          <a href="#" class="nav-item nav-item--active">
+            <span class="nav-dot"></span>Overview
+          </a>
+          <a href="#upload-card" class="nav-item">
+            <span class="nav-dot"></span>Upload
+          </a>
+          <a href="#" class="nav-item">
+            <span class="nav-dot"></span>Category context
+          </a>
+          <span class="nav-item nav-item--inert">
+            <span class="nav-dot"></span>History
+          </span>
+          <span class="nav-item nav-item--inert">
+            <span class="nav-dot"></span>Settings
+          </span>
+        </nav>
 
-      <div id="message" class="message-banner" hidden></div>
+        <div id="sidebar-month" class="sidebar-info"></div>
+      </aside>
 
-      <div class="fuel-rule-control">
-        <label class="fuel-rule-label" for="fuel-rule-toggle">
-          <input id="fuel-rule-toggle" type="checkbox" />
-          <span
-            >Count small fuel-stop spends (under $10 at BP, 7-Eleven, etc.) as
-            Dining Out</span
-          >
-        </label>
-      </div>
+      <div class="main-column">
+        <header class="site-header">
+          <div>
+            <h1>Overview</h1>
+            <p id="month-label" class="header-subtitle"></p>
+          </div>
 
-      <div id="dashboard" class="dashboard">
-        <div class="chart-container">
-          <canvas id="chart"></canvas>
-        </div>
-        <div class="totals-container">
-          <table class="totals-table">
-            <thead>
-              <tr>
-                <th>Category</th>
-                <th class="amount-col">Amount</th>
-              </tr>
-            </thead>
-            <tbody id="totals-body"></tbody>
-          </table>
+          <div class="header-controls">
+            <span id="status-dot" class="status-dot" title="Backend status unknown"></span>
+            <button id="refresh" type="button" class="refresh-btn">Refresh</button>
+            <button id="theme-toggle" type="button" class="theme-toggle">
+              <span id="theme-dot" class="theme-dot"></span>
+              <span id="theme-label">Light</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="main-content">
+          <div id="message" class="message-banner" hidden></div>
+
+          <div class="overview-grid">
+            <!-- Donut card -->
+            <section class="card donut-card">
+              <div class="donut-wrapper">
+                <div id="donut-glow" class="donut-glow" aria-hidden="true"></div>
+                <canvas id="donut-canvas" width="200" height="200"></canvas>
+                <div class="donut-overlay">
+                  <span class="donut-overlay-label">SPENT</span>
+                  <span id="spent-total" class="donut-overlay-total"></span>
+                </div>
+              </div>
+              <div class="donut-side">
+                <div id="legend" class="legend"></div>
+                <div id="net-value" class="net-value"></div>
+              </div>
+            </section>
+
+            <!-- Fuel-stop reclassify card -->
+            <section class="card fuel-card">
+              <div class="fuel-card-head">
+                <div class="fuel-card-title-block">
+                  <div class="fuel-card-title">
+                    <span class="swatch swatch--transport"></span>&rarr;<span
+                      class="swatch swatch--dining"
+                    ></span>
+                    Small servo spends
+                  </div>
+                  <p class="fuel-card-desc">
+                    Count purchases <strong>under $10</strong> at fuel &amp; convenience stops
+                    (BP, 7-Eleven, Ampol, Shell, Caltex, Coles Express, Reddy Express) as
+                    <strong>Dining Out</strong> instead of Transport — that&rsquo;s usually a
+                    coffee or a pie, not fuel.
+                  </p>
+                </div>
+                <label class="fuel-switch" for="fuel-rule-toggle">
+                  <input id="fuel-rule-toggle" type="checkbox" />
+                  <span class="fuel-switch-track"><span class="knob"></span></span>
+                </label>
+              </div>
+
+              <div class="fuel-card-divider"></div>
+
+              <div class="fuel-card-rows">
+                <div class="fuel-card-row">
+                  <span>Fuel &amp; snacks over $10</span>
+                  <span class="fuel-card-row-value">Stays Transport</span>
+                </div>
+                <div class="fuel-card-row">
+                  <span>Travel-only fares <span class="muted-inline">(Opal, Myki, SkyBus)</span></span>
+                  <span class="fuel-card-row-value">Never moved</span>
+                </div>
+              </div>
+
+              <div id="fuel-note" class="fuel-note"></div>
+            </section>
+          </div>
+
+          <!-- Upload section (FR-1 / FR-4) -->
+          <section id="upload-card" class="card upload">
+            <h2 class="upload-title">Upload</h2>
+            <div class="upload-zones">
+              <div class="upload-zone-wrapper">
+                <span class="upload-zone-label">CommBank CSV</span>
+                <div
+                  id="dropzone-commbank"
+                  class="dropzone"
+                  tabindex="0"
+                  role="button"
+                  aria-label="Drop CommBank CSV here or click to browse"
+                >
+                  <span class="dropzone-hint">Drop CSV here or click to browse</span>
+                  <span id="filename-commbank" class="filename"></span>
+                </div>
+                <input id="file-commbank" type="file" accept=".csv" hidden />
+              </div>
+
+              <div class="upload-zone-wrapper">
+                <span class="upload-zone-label">Westpac CSV</span>
+                <div
+                  id="dropzone-westpac"
+                  class="dropzone"
+                  tabindex="0"
+                  role="button"
+                  aria-label="Drop Westpac CSV here or click to browse"
+                >
+                  <span class="dropzone-hint">Drop CSV here or click to browse</span>
+                  <span id="filename-westpac" class="filename"></span>
+                </div>
+                <input id="file-westpac" type="file" accept=".csv" hidden />
+              </div>
+            </div>
+
+            <button id="upload-submit" type="button" class="upload-btn">Upload</button>
+            <p id="upload-status" class="upload-status" role="status" aria-live="polite"></p>
+          </section>
         </div>
       </div>
     </div>

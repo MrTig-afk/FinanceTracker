@@ -11,17 +11,17 @@
  *  - Net is taken straight from summary.net — never recomputed client-side.
  */
 
-/** Fixed colour palette for the v1 taxonomy. */
+/** Fixed colour palette for the v1 taxonomy (matches the design mockup COLORS). */
 export const CATEGORY_COLORS = {
-  Groceries: '#4CAF50',
-  Utilities: '#2196F3',
-  Rent: '#9C27B0',
-  'Dining Out': '#FF5722',
-  Transport: '#FF9800',
-  Entertainment: '#E91E63',
-  Subscriptions: '#00BCD4',
+  Groceries: '#57b26f',
+  Utilities: '#4a90d9',
+  Rent: '#9b6cd4',
+  'Dining Out': '#e0913f',
+  Transport: '#34a7a3',
+  Entertainment: '#d96ba6',
+  Subscriptions: '#6f6bd8',
+  Other: '#a89f8c',
   Income: '#8BC34A',
-  Other: '#607D8B',
   Uncategorised: '#9E9E9E',
 };
 
@@ -135,6 +135,18 @@ export function categoryRows(summary) {
   rows.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
 
   return rows;
+}
+
+/**
+ * Sum of the spend-donut magnitudes — the "SPENT" count-up target.
+ * Pure passthrough of toChartData(summary).values so the donut, legend
+ * percentages, and the SPENT figure all agree on the same total.
+ * @param {{ totals: Record<string,string> }} summary
+ * @returns {number}  A non-negative number; 0 when there is nothing to chart.
+ */
+export function spendTotal(summary) {
+  const { values } = toChartData(summary);
+  return values.reduce((sum, v) => sum + v, 0);
 }
 
 /**

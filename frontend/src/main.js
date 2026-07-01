@@ -9,6 +9,7 @@ import { createDashboard } from './dashboard.js';
 import { createQueue } from './queue.js';
 import { createUploadController } from './uploadController.js';
 import { postUpload } from './upload.js';
+import { initTheme } from './theme.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -47,8 +48,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const refreshBtn = document.getElementById('refresh');
   const fuelToggle = document.getElementById('fuel-rule-toggle');
 
+  // Apply the stored theme immediately (avoids a flash of the wrong theme);
+  // re-sync the donut border whenever the theme flips.
+  initTheme({ root: document, onChange: () => dash.applyChartTheme() });
+
   // Render a summary object, choosing the empty state when there is no data.
-  function renderSummary(summary) {
+  function renderSummary(summary, opts = {}) {
     const isEmpty =
       summary.count === 0 ||
       !summary.totals ||
@@ -57,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isEmpty) {
       dash.showEmpty();
     } else {
-      dash.render(summary);
+      dash.render(summary, opts);
     }
   }
 
@@ -66,7 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // -------------------------------------------------------------------------
   async function load() {
     try {
-      renderSummary(await fetchSummary());
+      renderSummary(await fetchSummary(), { pulse: false });
     } catch (err) {
       dash.showError(err);
     }
@@ -112,7 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (fuelToggle) {
     fuelToggle.addEventListener('change', async () => {
       try {
-        renderSummary(await postReclassify(fuelToggle.checked));
+        renderSummary(await postReclassify(fuelToggle.checked), { pulse: true });
       } catch (err) {
         dash.showError(err);
         load();

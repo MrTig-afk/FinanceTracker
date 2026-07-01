@@ -1,12 +1,16 @@
 /**
  * dashboard.test.js — DOM-rendering tests for dashboard.js.
  * Chart.js is mocked via vi.mock (hoisted) so module-level Chart.register
- * does not throw. jsdom provides the DOM environment.
+ * does not throw. jsdom provides the DOM environment. requestAnimationFrame
+ * is stubbed to fire immediately with a large timestamp so the SPENT
+ * count-up and legend-bar reveal land synchronously (see dashboard.js's
+ * ease-out-cubic tween, which uses the rAF-supplied timestamp, not Date.now()).
  * All fixtures are synthetic, generated inline. No real transaction data.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ApiError } from './api.js';
+import { spendTotal, formatCurrency } from './summary.js';
 
 // ---------------------------------------------------------------------------
 // Mock chart.js BEFORE dashboard.js is imported.
@@ -17,7 +21,11 @@ vi.mock('chart.js', () => {
   // Use a normal function (not an arrow) so it can be called with `new`:
   // Vitest 4 no longer lets an arrow-function mock implementation be constructed.
   const Chart = vi.fn(function () {
-    return { destroy: vi.fn() };
+    return {
+      destroy: vi.fn(),
+      update: vi.fn(),
+      data: { datasets: [{ borderColor: null }] },
+    };
   });
   Chart.register = vi.fn();
   return {
@@ -39,20 +47,23 @@ import { createDashboard } from './dashboard.js';
 
 const DOM_HTML = `
   <span id="month-label"></span>
-  <span id="net-value"></span>
-  <canvas id="chart"></canvas>
-  <table><tbody id="totals-body"></tbody></table>
+  <div id="sidebar-month"></div>
+  <div id="net-value"></div>
+  <canvas id="donut-canvas" width="200" height="200"></canvas>
+  <span id="spent-total"></span>
+  <div id="legend"></div>
   <span id="status-dot"></span>
   <div id="message" hidden></div>
   <button id="refresh"></button>
   <input id="fuel-rule-toggle" type="checkbox" />
+  <div id="fuel-note"></div>
 `;
 
 // ---------------------------------------------------------------------------
 // Synthetic fixtures — no real transaction data.
 // ---------------------------------------------------------------------------
 
-/** Three categories: two net-expense + Income (net-positive, excluded from pie). */
+/** Two expense categories + Income (net-positive, excluded from pie). */
 const SYNTHETIC_SUMMARY = {
   year_month: '2026-06',
   totals: {
@@ -62,6 +73,24 @@ const SYNTHETIC_SUMMARY = {
   },
   net: '-450.00',
   count: 10,
+  fuel_rule_applied: false,
+  fuel_rule_eligible: 3,
+  fuel_rule_eligible_amount: '-24.10',
+};
+
+/** Transport + Dining Out present so the pulse test can check both. */
+const PULSE_SUMMARY = {
+  year_month: '2026-06',
+  totals: {
+    Groceries: '-100.00',
+    Transport: '-40.00',
+    'Dining Out': '-20.00',
+  },
+  net: '-160.00',
+  count: 6,
+  fuel_rule_applied: true,
+  fuel_rule_eligible: 2,
+  fuel_rule_eligible_amount: '-12.50',
 };
 
 /** All-positive / empty — drives empty state. */
@@ -70,18 +99,24 @@ const EMPTY_SUMMARY = {
   totals: {},
   net: '0.00',
   count: 0,
+  fuel_rule_applied: false,
+  fuel_rule_eligible: 0,
+  fuel_rule_eligible_amount: '0.00',
 };
 
-/** Only Income in totals — pie is empty but table has one row. */
+/** Only Income in totals — pie/legend empty. */
 const INCOME_ONLY_SUMMARY = {
   year_month: '2026-07',
   totals: { Income: '2500.00' },
   net: '2500.00',
   count: 1,
+  fuel_rule_applied: false,
+  fuel_rule_eligible: 0,
+  fuel_rule_eligible_amount: '0.00',
 };
 
 // ---------------------------------------------------------------------------
-// Setup — rebuild DOM and clear Chart mock before every test.
+// Setup — rebuild DOM, clear Chart mock, stub rAF before every test.
 // ---------------------------------------------------------------------------
 
 let dash;
@@ -89,7 +124,20 @@ let dash;
 beforeEach(() => {
   document.body.innerHTML = DOM_HTML;
   Chart.mockClear();
+
+  // Fire the rAF callback immediately with a large timestamp so the
+  // ease-out-cubic tween's `p` hits 1 on the very first (synchronous) frame.
+  vi.stubGlobal('requestAnimationFrame', (cb) => {
+    cb(1e12);
+    return 1;
+  });
+  vi.stubGlobal('cancelAnimationFrame', () => {});
+
   dash = createDashboard(document);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
@@ -97,9 +145,17 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('render with summary data', () => {
-  it('sets #month-label to the human-readable month', () => {
+  it('sets #month-label to "Spending breakdown for <Month Year>"', () => {
     dash.render(SYNTHETIC_SUMMARY);
-    expect(document.getElementById('month-label').textContent).toBe('June 2026');
+    expect(document.getElementById('month-label').textContent).toBe(
+      'Spending breakdown for June 2026',
+    );
+  });
+
+  it('sets #sidebar-month to "<Month Year> · CommBank + Westpac imported."', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    expect(document.getElementById('sidebar-month').textContent).toContain('June 2026');
+    expect(document.getElementById('sidebar-month').textContent).toContain('imported');
   });
 
   it('sets #net-value to a formatted currency string', () => {
@@ -107,20 +163,6 @@ describe('render with summary data', () => {
     const text = document.getElementById('net-value').textContent;
     expect(text).toContain('$');
     expect(text).toContain('450');
-  });
-
-  it('populates #totals-body with one <tr> per category (3 rows)', () => {
-    dash.render(SYNTHETIC_SUMMARY);
-    const rows = document.getElementById('totals-body').querySelectorAll('tr');
-    expect(rows.length).toBe(3);
-  });
-
-  it('each totals row has exactly 2 <td> cells', () => {
-    dash.render(SYNTHETIC_SUMMARY);
-    const rows = document.getElementById('totals-body').querySelectorAll('tr');
-    rows.forEach((row) => {
-      expect(row.querySelectorAll('td').length).toBe(2);
-    });
   });
 
   it('constructs exactly one Chart instance', () => {
@@ -131,6 +173,42 @@ describe('render with summary data', () => {
   it('hides #message when spending data is present', () => {
     dash.render(SYNTHETIC_SUMMARY);
     expect(document.getElementById('message').hidden).toBe(true);
+  });
+
+  it('#spent-total equals formatCurrency(spendTotal(summary))', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    expect(document.getElementById('spent-total').textContent).toBe(
+      formatCurrency(spendTotal(SYNTHETIC_SUMMARY)),
+    );
+  });
+
+  it('#legend has one .legend-row per expense category (Groceries, Transport)', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const rows = document.querySelectorAll('#legend .legend-row');
+    expect(rows.length).toBe(2);
+  });
+
+  it('each legend row has a color dot, name, amount, and pct', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const rows = document.querySelectorAll('#legend .legend-row');
+    rows.forEach((row) => {
+      const dot = row.querySelector('.legend-dot');
+      const name = row.querySelector('.legend-name');
+      const amount = row.querySelector('.legend-amount');
+      const pct = row.querySelector('.legend-pct');
+      expect(dot.style.background).toBeTruthy();
+      expect(name.textContent.length).toBeGreaterThan(0);
+      expect(amount.textContent).toMatch(/^-?\$/);
+      expect(pct.textContent).toMatch(/%$/);
+    });
+  });
+
+  it('legend rows are ordered by magnitude DESC (Groceries before Transport)', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const names = [...document.querySelectorAll('#legend .legend-name')].map(
+      (el) => el.textContent,
+    );
+    expect(names).toEqual(['Groceries', 'Transport']);
   });
 });
 
@@ -153,10 +231,20 @@ describe('render with empty totals', () => {
     dash.render(EMPTY_SUMMARY);
     expect(document.getElementById('message').textContent.length).toBeGreaterThan(0);
   });
+
+  it('#spent-total is formatCurrency(0)', () => {
+    dash.render(EMPTY_SUMMARY);
+    expect(document.getElementById('spent-total').textContent).toBe(formatCurrency(0));
+  });
+
+  it('#legend is empty', () => {
+    dash.render(EMPTY_SUMMARY);
+    expect(document.querySelectorAll('#legend .legend-row').length).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// render — income-only (pie empty but table has rows)
+// render — income-only (pie/legend empty)
 // ---------------------------------------------------------------------------
 
 describe('render with income-only summary', () => {
@@ -165,10 +253,106 @@ describe('render with income-only summary', () => {
     expect(Chart).not.toHaveBeenCalled();
   });
 
-  it('still populates #totals-body (Income row present)', () => {
+  it('#legend has no rows (Income excluded from the donut)', () => {
     dash.render(INCOME_ONLY_SUMMARY);
-    const rows = document.getElementById('totals-body').querySelectorAll('tr');
-    expect(rows.length).toBe(1);
+    expect(document.querySelectorAll('#legend .legend-row').length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fuel-rule toggle — reflects summary.fuel_rule_applied
+// ---------------------------------------------------------------------------
+
+describe('fuel-rule toggle state', () => {
+  it('checks the toggle when fuel_rule_applied is true', () => {
+    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: true });
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(true);
+  });
+
+  it('unchecks the toggle when fuel_rule_applied is false', () => {
+    document.getElementById('fuel-rule-toggle').checked = true;
+    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: false });
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
+  });
+
+  it('unchecks the toggle when fuel_rule_applied is absent', () => {
+    document.getElementById('fuel-rule-toggle').checked = true;
+    const { fuel_rule_applied, ...rest } = SYNTHETIC_SUMMARY;
+    dash.render(rest);
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fuel-note — OFF/ON copy and singular/plural
+// ---------------------------------------------------------------------------
+
+describe('#fuel-note copy', () => {
+  it('OFF text mentions reclassifying N transactions (plural)', () => {
+    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: false, fuel_rule_eligible: 3 });
+    const text = document.getElementById('fuel-note').textContent;
+    expect(text).toContain('reclassify 3 transactions');
+  });
+
+  it('OFF text uses singular "transaction" when eligible === 1', () => {
+    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: false, fuel_rule_eligible: 1 });
+    const text = document.getElementById('fuel-note').textContent;
+    expect(text).toContain('reclassify 1 transaction.');
+    expect(text).not.toContain('1 transactions');
+  });
+
+  it('ON text mentions "moved to Dining Out" and the eligible count', () => {
+    dash.render({
+      ...SYNTHETIC_SUMMARY,
+      fuel_rule_applied: true,
+      fuel_rule_eligible: 3,
+      fuel_rule_eligible_amount: '-24.10',
+    });
+    const text = document.getElementById('fuel-note').textContent;
+    expect(text).toContain('moved to Dining Out');
+    expect(text).toContain('3 small servo purchases');
+    expect(text).toContain('$24.10');
+  });
+
+  it('ON text uses singular "purchase" when eligible === 1', () => {
+    dash.render({
+      ...SYNTHETIC_SUMMARY,
+      fuel_rule_applied: true,
+      fuel_rule_eligible: 1,
+      fuel_rule_eligible_amount: '-8.00',
+    });
+    const text = document.getElementById('fuel-note').textContent;
+    expect(text).toContain('1 small servo purchase ');
+    expect(text).not.toContain('1 small servo purchases');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pulse:true — transient highlight classes
+// ---------------------------------------------------------------------------
+
+describe('render(summary, { pulse: true })', () => {
+  it('adds .pulse-hi to Transport and Dining Out legend rows only', () => {
+    dash.render(PULSE_SUMMARY, { pulse: true });
+    const rows = document.querySelectorAll('#legend .legend-row');
+    const byCategory = {};
+    rows.forEach((row) => {
+      byCategory[row.dataset.category] = row;
+    });
+    expect(byCategory['Transport'].classList.contains('pulse-hi')).toBe(true);
+    expect(byCategory['Dining Out'].classList.contains('pulse-hi')).toBe(true);
+    expect(byCategory['Groceries'].classList.contains('pulse-hi')).toBe(false);
+  });
+
+  it('adds .note-in to #fuel-note', () => {
+    dash.render(PULSE_SUMMARY, { pulse: true });
+    expect(document.getElementById('fuel-note').classList.contains('note-in')).toBe(true);
+  });
+
+  it('does not add pulse classes when pulse is not passed (default false)', () => {
+    dash.render(PULSE_SUMMARY);
+    expect(document.querySelectorAll('.pulse-hi').length).toBe(0);
+    expect(document.getElementById('fuel-note').classList.contains('note-in')).toBe(false);
   });
 });
 
@@ -192,12 +376,22 @@ describe('showEmpty', () => {
     expect(Chart).not.toHaveBeenCalled();
   });
 
-  it('clears #totals-body', () => {
-    // First render to populate, then showEmpty must clear.
+  it('clears #legend', () => {
     dash.render(SYNTHETIC_SUMMARY);
     dash.showEmpty();
-    const rows = document.getElementById('totals-body').querySelectorAll('tr');
-    expect(rows.length).toBe(0);
+    expect(document.querySelectorAll('#legend .legend-row').length).toBe(0);
+  });
+
+  it('sets #spent-total to formatCurrency(0)', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    dash.showEmpty();
+    expect(document.getElementById('spent-total').textContent).toBe(formatCurrency(0));
+  });
+
+  it('unchecks the fuel toggle', () => {
+    document.getElementById('fuel-rule-toggle').checked = true;
+    dash.showEmpty();
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
   });
 });
 
@@ -230,7 +424,6 @@ describe('showError', () => {
 
   it('works when err.status is null (network failure, no HTTP status)', () => {
     const err = new ApiError('network error');
-    // should not throw
     expect(() => dash.showError(err)).not.toThrow();
     expect(document.getElementById('message').textContent).toContain('Could not load summary');
   });
@@ -245,12 +438,10 @@ describe('double render', () => {
     dash.render(SYNTHETIC_SUMMARY);
     const firstInstance = Chart.mock.results[0].value;
 
-    // First instance must NOT be destroyed yet.
     expect(firstInstance.destroy).not.toHaveBeenCalled();
 
     dash.render(SYNTHETIC_SUMMARY);
 
-    // First instance must be destroyed before the second render.
     expect(firstInstance.destroy).toHaveBeenCalledOnce();
   });
 
@@ -262,25 +453,19 @@ describe('double render', () => {
 });
 
 // ---------------------------------------------------------------------------
-// fuel-rule toggle — reflects summary.fuel_rule_applied
+// applyChartTheme
 // ---------------------------------------------------------------------------
 
-describe('fuel-rule toggle state', () => {
-  it('checks the toggle when fuel_rule_applied is true', () => {
-    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: true });
-    expect(document.getElementById('fuel-rule-toggle').checked).toBe(true);
+describe('applyChartTheme', () => {
+  it('is a no-op when no chart has been created', () => {
+    expect(() => dash.applyChartTheme()).not.toThrow();
   });
 
-  it('unchecks the toggle when fuel_rule_applied is false', () => {
-    document.getElementById('fuel-rule-toggle').checked = true;
-    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: false });
-    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
-  });
-
-  it('unchecks the toggle when fuel_rule_applied is absent', () => {
-    document.getElementById('fuel-rule-toggle').checked = true;
+  it('updates the live chart border color and calls update("none")', () => {
     dash.render(SYNTHETIC_SUMMARY);
-    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
+    const instance = Chart.mock.results[0].value;
+    dash.applyChartTheme();
+    expect(instance.update).toHaveBeenCalledWith('none');
   });
 });
 

@@ -427,6 +427,44 @@ class Store:
         self.conn.commit()
         return cursor.rowcount
 
+    def fuel_rule_eligible(self, year_month: str | None = None) -> tuple[int, Decimal]:
+        """Count + summed amount of transactions subject to the small-fuel-stop rule this month.
+
+        A row is 'eligible' (stable across the toggle) when EITHER:
+          - it is currently in Transport AND is_fuel_convenience(description)
+            AND _FUEL_RULE_FLOOR < amount < 0   (not yet moved), OR
+          - reclassified_by_rule == 1           (already moved by the rule).
+
+        Returns (count, total_amount) where total_amount is the signed Decimal sum
+        (negative debits). (0, Decimal('0.00')) when the month/db is empty.
+        """
+        if year_month is None:
+            year_month = self.latest_year_month()
+        if year_month is None:
+            return (0, Decimal("0.00"))
+
+        rows = self.conn.execute(
+            "SELECT description, amount, category, reclassified_by_rule "
+            "FROM transactions WHERE year_month = ?",
+            (year_month,),
+        ).fetchall()
+
+        count = 0
+        total = Decimal("0.00")
+        for row in rows:
+            amount = amount_from_text(row["amount"])
+            already_moved = row["reclassified_by_rule"] == 1
+            not_yet_moved = (
+                row["category"] == _FUEL_RULE_FROM
+                and is_fuel_convenience(row["description"])
+                and _FUEL_RULE_FLOOR < amount < Decimal("0")
+            )
+            if already_moved or not_yet_moved:
+                count += 1
+                total += amount
+
+        return (count, total)
+
     def fuel_rule_applied(self, year_month: str | None = None) -> bool:
         """True if any row in the month is currently reclassified by the fuel rule."""
         if year_month is None:
@@ -476,6 +514,8 @@ class Store:
                 "net": "-50.00",
                 "count": 12,
                 "fuel_rule_applied": false,  # small-fuel-stop rule active this month?
+                "fuel_rule_eligible": 3,  # count of rows subject to the fuel-stop rule
+                "fuel_rule_eligible_amount": "-24.10",  # signed Decimal sum, as str
             }
         """
         if year_month is None:
@@ -489,6 +529,8 @@ class Store:
                 "net": "0.00",
                 "count": 0,
                 "fuel_rule_applied": False,
+                "fuel_rule_eligible": 0,
+                "fuel_rule_eligible_amount": "0.00",
             }
 
         rows = self.conn.execute(
@@ -505,12 +547,16 @@ class Store:
             totals[cat] = totals.get(cat, Decimal("0.00")) + amt
             net += amt
 
+        count, amt = self.fuel_rule_eligible(year_month)
+
         return {
             "year_month": year_month,
             "totals": {k: str(v) for k, v in totals.items()},
             "net": str(net),
             "count": len(rows),
             "fuel_rule_applied": self.fuel_rule_applied(year_month),
+            "fuel_rule_eligible": count,
+            "fuel_rule_eligible_amount": str(amt),
         }
 
     def transactions_for_month(self, year_month: str | None = None) -> list[MonthRow]:
