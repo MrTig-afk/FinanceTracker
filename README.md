@@ -212,7 +212,18 @@ On macOS, use a launchd LaunchAgent with `RunAtLoad` and `KeepAlive`; on Linux, 
 
 ## Feature set
 
-The current build covers the full loop described above, plus: monthly and yearly views with period-over-period changes, category trend charts, a category drill-down drawer with one-tap corrections, per-category merchant hints, notifications (in-app toasts while the app is focused, Web Push when backgrounded), a Settings tab (per-notification-type toggles, CSV backup and reset, categoriser test, learned-corrections management), `.xlsx` statement upload, and content-based bank detection.
+The current build covers the full loop described above, plus: monthly and yearly views with period-over-period changes, category trend charts, a category drill-down drawer with one-tap corrections (shown only when learned corrections are enabled in Settings), per-category merchant hints, notifications (in-app toasts while the app is focused, Web Push when backgrounded), a Settings tab (per-notification-type toggles, CSV backup and reset, categoriser test, learned-corrections management), `.xlsx` statement upload, and content-based bank detection.
+
+## Roadmap (v6, in progress)
+
+In build order:
+
+1. **Transaction search**: full-text search across every stored transaction (SQLite FTS5), reusing the drawer's row rendering.
+2. **Internal transfer netting**: money moved between your own accounts shows up in both banks' CSVs and double-counts as spending. Matched opposite-sign pairs within a small date window get tagged as transfers and excluded from the totals, with a review view to untag false matches.
+3. **Budget alerts**: per-category monthly budgets set in Settings, checked after each pipeline run, delivered through the existing notification channels ("Dining Out is at 85% with 9 days left").
+4. **Subscription watch**: recurring-merchant detection over the stored rows that flags a new subscription appearing, a price change on an existing one, or an expected income deposit that did not arrive.
+
+Everything on the list follows the same rules as the rest of the app: local heuristics over data already on your machine, synthetic-data tests, and nothing new sent off-machine.
 
 ## License
 
