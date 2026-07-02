@@ -988,7 +988,7 @@ class Store:
                 "total": "-170.01",
                 "count": 1,
                 "transactions": [
-                    {"date": "YYYY-MM-DD", "description": "...",
+                    {"id": 12, "date": "YYYY-MM-DD", "description": "...",
                      "amount": "-170.01", "bank": "commbank"},
                     ...
                 ],
@@ -1012,7 +1012,7 @@ class Store:
             where, params = "year_month = ? AND category = ?", (year_month, category)
 
         rows = self.conn.execute(
-            f"SELECT date, description, amount, bank FROM transactions WHERE {where}",
+            f"SELECT id, date, description, amount, bank FROM transactions WHERE {where}",
             params,
         ).fetchall()
 
@@ -1031,6 +1031,7 @@ class Store:
             "count": len(rows),
             "transactions": [
                 {
+                    "id": r["id"],  # row id — lets the client target a category override
                     "date": r["date"],
                     "description": r["description"],
                     "amount": r["amount"],  # already canonical str(Decimal)

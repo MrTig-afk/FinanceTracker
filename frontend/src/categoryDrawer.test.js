@@ -13,7 +13,7 @@ const CANNED = {
   total: '-170.01',
   count: 1,
   transactions: [
-    { date: '2026-06-12', description: 'SYNTH SUB', amount: '-170.01', bank: 'commbank' },
+    { id: 7, date: '2026-06-12', description: 'SYNTH SUB', amount: '-170.01', bank: 'commbank' },
   ],
 };
 
@@ -115,5 +115,105 @@ describe('createCategoryDrawer', () => {
     await drawer.open('Subscriptions', {});
 
     expect(document.querySelector('.cat-drawer-sub').textContent).toContain('Could not load');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Category picker — manual override (SYNTHETIC data only)
+// ---------------------------------------------------------------------------
+
+const picker = () => document.querySelector('.cat-drawer-picker');
+
+describe('createCategoryDrawer — category picker', () => {
+  it('renders a picker per row with the current category pre-selected', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED);
+    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn: vi.fn() });
+
+    await drawer.open('Subscriptions', { month: '2026-06' });
+
+    expect(document.querySelectorAll('.cat-drawer-picker').length).toBe(1);
+    expect(picker().value).toBe('Subscriptions');
+    // The 8 canonical taxonomy labels are offered as options.
+    const labels = [...picker().options].map((o) => o.value).filter(Boolean);
+    expect(labels).toEqual([
+      'Groceries', 'Housing', 'Dining Out', 'Transport',
+      'Entertainment', 'Subscriptions', 'Income', 'Other',
+    ]);
+    expect(picker().getAttribute('aria-label')).toContain('category');
+  });
+
+  it('shows no pre-selected canonical option for the Uncategorised view', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ...CANNED,
+      category: 'Uncategorised',
+      transactions: [
+        { id: 9, date: '2026-06-01', description: 'SYNTH MYSTERY', amount: '-5.00', bank: 'westpac' },
+      ],
+    });
+    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn: vi.fn() });
+
+    await drawer.open('Uncategorised', { month: '2026-06' });
+
+    // A disabled placeholder ('') is selected, not a real category.
+    expect(picker().value).toBe('');
+  });
+
+  it('changing the picker calls overrideFn with (id, newCategory)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED);
+    const overrideFn = vi.fn().mockResolvedValue({ totals: {}, net: '0.00', count: 0 });
+    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn });
+
+    await drawer.open('Subscriptions', { month: '2026-06' });
+
+    picker().value = 'Dining Out';
+    picker().dispatchEvent(new Event('change'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(overrideFn).toHaveBeenCalledWith(7, 'Dining Out');
+  });
+
+  it('on success re-fetches the same category and fires onChanged(summary)', async () => {
+    const UPDATED = { totals: { Groceries: '-1.00' }, net: '-1.00', count: 1 };
+    const fetchFn = vi.fn().mockResolvedValue(CANNED);
+    const overrideFn = vi.fn().mockResolvedValue(UPDATED);
+    const onChanged = vi.fn();
+    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn, onChanged });
+
+    await drawer.open('Subscriptions', { month: '2026-06' });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+
+    picker().value = 'Dining Out';
+    picker().dispatchEvent(new Event('change'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onChanged).toHaveBeenCalledWith(UPDATED);
+    // Re-fetched the SAME category so the corrected row drops out of the view.
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(fetchFn).toHaveBeenLastCalledWith('Subscriptions', '2026-06');
+  });
+
+  it('on failure shows an inline message and does not fire onChanged', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED);
+    const overrideFn = vi.fn().mockRejectedValue(new Error('boom'));
+    const onChanged = vi.fn();
+    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn, onChanged });
+
+    await drawer.open('Subscriptions', { month: '2026-06' });
+
+    picker().value = 'Dining Out';
+    picker().dispatchEvent(new Event('change'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const err = document.querySelector('.cat-drawer-row-error');
+    expect(err).not.toBeNull();
+    expect(err.hidden).toBe(false);
+    expect(err.textContent).toContain('Could not update');
+    expect(onChanged).not.toHaveBeenCalled();
+    // The list was not re-fetched (override failed before the refresh).
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 });

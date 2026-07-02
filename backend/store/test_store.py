@@ -1861,7 +1861,8 @@ class TestTransactionsForCategory:
         assert [t["amount"] for t in res["transactions"]] == ["-170.01", "-15.99"]
         assert res["total"] == "-186.00"
         for t in res["transactions"]:
-            assert set(t.keys()) == {"date", "description", "amount", "bank"}
+            assert set(t.keys()) == {"id", "date", "description", "amount", "bank"}
+            assert isinstance(t["id"], int)
 
     def test_uncategorised_label_selects_null_category_rows(self):
         with Store(":memory:") as store:

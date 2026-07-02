@@ -15,6 +15,7 @@ import {
   fetchCategoryContext,
   saveCategoryContext,
   fetchCategoryTransactions,
+  postCategoryOverride,
   postPushSubscribe,
   postPushUnsubscribe,
   ApiError,
@@ -179,6 +180,49 @@ describe('fetchCategoryTransactions', () => {
   it('rejects with ApiError (not raw TypeError) on network failure', async () => {
     vi.stubGlobal('fetch', makeNetworkFailFetch());
     const err = await fetchCategoryTransactions('Subscriptions').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// postCategoryOverride — manual category correction
+// ---------------------------------------------------------------------------
+
+describe('postCategoryOverride', () => {
+  it('resolves to the updated summary JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch());
+    const result = await postCategoryOverride(42, 'Dining Out');
+    expect(result).toEqual(CANNED_SUMMARY);
+  });
+
+  it('POSTs {id, category} JSON body to /category-override', async () => {
+    const mockFetch = makeOkFetch();
+    vi.stubGlobal('fetch', mockFetch);
+    await postCategoryOverride(42, 'Dining Out');
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/category-override');
+    expect(options.method).toBe('POST');
+    expect(options.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(options.body)).toEqual({ id: 42, category: 'Dining Out' });
+  });
+
+  it('rejects with ApiError carrying the status on a 400 (unknown category)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await postCategoryOverride(42, 'Bananas').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
+  it('rejects with ApiError carrying the status on a 404 (row not found)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(404));
+    const err = await postCategoryOverride(999999, 'Groceries').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await postCategoryOverride(42, 'Groceries').catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
   });
 });

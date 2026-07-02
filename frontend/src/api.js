@@ -182,6 +182,36 @@ export async function postReclassify(enabled, month) {
 }
 
 /**
+ * Override one transaction's category (manual correction).
+ * Edits the owner's own local backend only; the request carries only the row id
+ * and the chosen canonical category label — no transaction description leaves the
+ * client. Returns the updated month summary (same shape as GET /summary) so the
+ * dashboard can re-render.
+ * @param {number} id        Transaction row id (from the drill-down view).
+ * @param {string} category  A canonical taxonomy label (not 'Uncategorised').
+ * @returns {Promise<object>} Updated summary object.
+ * @throws {ApiError}         On network failure or non-2xx response.
+ */
+export async function postCategoryOverride(id, category) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/category-override`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, category }),
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
  * Fetch the category-context screen's 9 canonical categories + stored hints.
  * @returns {Promise<{categories: Array<{name: string, color: string, hints: string, position: number}>}>}
  * @throws {ApiError} On network failure or non-2xx response.

@@ -54,7 +54,12 @@ if (import.meta.env.PROD) {
 
 document.addEventListener('DOMContentLoaded', () => {
   createMobileNav({ root: document });
-  const categoryDrawer = createCategoryDrawer({ root: document });
+  // onChanged fires after a manual category override; reuse load() so the
+  // Overview summary/donut (and mini-trend) re-render with the corrected totals.
+  const categoryDrawer = createCategoryDrawer({
+    root: document,
+    onChanged: () => load(),
+  });
   const dash = createDashboard(document, {
     onCategorySelect: (category, meta) => categoryDrawer.open(category, meta),
   });

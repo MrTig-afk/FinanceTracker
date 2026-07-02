@@ -1006,13 +1006,14 @@ class TestCategoryTransactionsEndpoint:
         assert body["count"] == 5
         assert len(body["transactions"]) == 5
 
-    def test_each_txn_has_only_the_four_view_fields(self, api_client):
+    def test_each_txn_has_only_the_five_view_fields(self, api_client):
         _upload_both(api_client)
         body = api_client.get(
             "/category-transactions", params={"category": "Groceries"}
         ).json()
         for t in body["transactions"]:
-            assert set(t.keys()) == {"date", "description", "amount", "bank"}
+            assert set(t.keys()) == {"id", "date", "description", "amount", "bank"}
+            assert isinstance(t["id"], int)
 
     def test_sorted_by_magnitude_desc(self, api_client):
         _upload_both(api_client)
