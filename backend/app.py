@@ -510,6 +510,10 @@ async def reclassify(
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
 
     store = app.state.store
+    # Persist the toggle as a preference so it stays where the owner left it,
+    # even when there are no eligible (under-$10 fuel) rows to actually move this
+    # month. The toggle reflects this preference, not whether any row was moved.
+    store.set_bool_setting("fuel_rule_enabled", enabled)
     if enabled:
         store.apply_fuel_dining_rule(month)
     else:

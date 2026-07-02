@@ -18,8 +18,8 @@ const SHELL_HTML = `
     <a href="#" class="nav-item" data-view="monthly">Monthly</a>
     <a href="#" class="nav-item" data-view="yearly">Yearly</a>
     <a href="#" class="nav-item" data-view="context">Category context</a>
-    <a href="#" class="nav-item" data-view="settings">Settings</a>
     <a href="#" class="nav-item" data-view="contact">Contact</a>
+    <a href="#" class="nav-item" data-view="settings">Settings</a>
   </nav>
   <header class="site-header">
     <h1>Overview</h1>
@@ -165,7 +165,7 @@ describe('nav order', () => {
       (el) => el.dataset.view ?? el.textContent.trim(),
     );
     expect(items).toEqual([
-      'upload', 'overview', 'trends', 'monthly', 'yearly', 'context', 'settings', 'contact',
+      'upload', 'overview', 'trends', 'monthly', 'yearly', 'context', 'contact', 'settings',
     ]);
   });
 });

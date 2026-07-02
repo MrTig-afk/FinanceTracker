@@ -164,6 +164,24 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Brand (logo + name) acts as a "home" button — clicking it returns to
+  // Overview. Keyboard-accessible (Enter/Space) since it is not a native link.
+  // -------------------------------------------------------------------------
+  const brand = document.querySelector('.sidebar-brand');
+  if (brand) {
+    brand.setAttribute('role', 'button');
+    brand.setAttribute('tabindex', '0');
+    brand.setAttribute('aria-label', 'Go to Overview');
+    brand.addEventListener('click', () => views.show('overview'));
+    brand.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        views.show('overview');
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Upload queue (FR-4) — IndexedDB-backed with memory fallback.
   // -------------------------------------------------------------------------
   const queue = createQueue(); // default: createIdbStore() with memory fallback

@@ -37,6 +37,23 @@ export function createFuelToast(root = document, opts = {}) {
     const n = Number(count) || 0;
     const noun = n === 1 ? 'purchase' : 'purchases';
 
+    // ON but nothing qualifies this month: the toggle is a standing preference,
+    // not a per-run action. Confirm the rule is on and will apply to future small
+    // fuel stops - never say "0 moved", which reads like an error.
+    if (on && n === 0) {
+      return toast.show({
+        title: 'Fuel-stop rule on',
+        modifier: '',
+        buildBody: (textEl, doc) => {
+          textEl.appendChild(
+            doc.createTextNode(
+              'No small fuel stops this month yet. New ones under $10 will count as Dining Out.',
+            ),
+          );
+        },
+      });
+    }
+
     return toast.show({
       title: on ? 'Moved to Dining Out' : 'Kept under Transport',
       // OFF keeps the original teal `toast--off` styling; ON uses the base toast.

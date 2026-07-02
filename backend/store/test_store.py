@@ -437,6 +437,7 @@ class TestSummaryCorrectness:
             "net": "0.00",
             "count": 0,
             "fuel_rule_applied": False,
+            "fuel_rule_enabled": False,
             "fuel_rule_eligible": 0,
             "fuel_rule_eligible_amount": "0.00",
             "account_balances": {},

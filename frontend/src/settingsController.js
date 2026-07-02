@@ -120,14 +120,17 @@ export function createSettings({ root = document, api } = {}) {
     const values = notifications ?? {};
 
     for (const [type, label] of NOTIFICATION_TYPES) {
-      const row = doc.createElement('label');
+      const row = doc.createElement('div');
       row.className = 'settings-toggle-row';
 
       const text = doc.createElement('span');
       text.className = 'settings-toggle-label';
       text.textContent = label;
 
-      const sw = doc.createElement('span');
+      // The switch is its own <label> wrapping the input (matches the working
+      // fuel-card toggle). Do NOT also wrap the row in a <label>, or a click
+      // fires the change twice (toggle on, then the outer label toggles it back).
+      const sw = doc.createElement('label');
       sw.className = 'fuel-switch';
 
       const input = doc.createElement('input');

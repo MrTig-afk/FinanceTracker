@@ -12,6 +12,8 @@ import {
   nextTheme,
   applyTheme,
   initTheme,
+  faviconDataUri,
+  applyFavicon,
 } from './theme.js';
 
 const REQUIRED_KEYS = [
@@ -257,5 +259,50 @@ describe('initTheme', () => {
   it('does not throw when #theme-toggle is absent', () => {
     document.body.innerHTML = '';
     expect(() => initTheme({ root: document })).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Favicon — tracks the in-app theme (dark plate in dark, white plate in light)
+// ---------------------------------------------------------------------------
+
+describe('faviconDataUri', () => {
+  it('encodes an SVG data URI with a dark plate in dark mode', () => {
+    const uri = faviconDataUri('dark');
+    expect(uri.startsWith('data:image/svg+xml,')).toBe(true);
+    expect(decodeURIComponent(uri)).toContain('#171b26');
+  });
+
+  it('uses a white plate in light mode', () => {
+    expect(decodeURIComponent(faviconDataUri('light'))).toContain('#ffffff');
+  });
+
+  it('falls back to the light plate for an unknown theme', () => {
+    expect(decodeURIComponent(faviconDataUri('nonsense'))).toContain('#ffffff');
+  });
+});
+
+describe('applyFavicon', () => {
+  beforeEach(() => {
+    document.head.innerHTML = '<link rel="icon" href="/finance-tracker-app-icon.svg" />';
+  });
+
+  it('points the icon link at the theme-matched favicon', () => {
+    applyFavicon('dark', document);
+    const href = document.querySelector('link[rel="icon"]').getAttribute('href');
+    expect(href).toBe(faviconDataUri('dark'));
+  });
+
+  it('updates the href when the theme flips', () => {
+    applyFavicon('dark', document);
+    applyFavicon('light', document);
+    expect(document.querySelector('link[rel="icon"]').getAttribute('href')).toBe(
+      faviconDataUri('light'),
+    );
+  });
+
+  it('does not throw when there is no icon link', () => {
+    document.head.innerHTML = '';
+    expect(() => applyFavicon('dark', document)).not.toThrow();
   });
 });

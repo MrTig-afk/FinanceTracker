@@ -83,9 +83,15 @@ class FakeStore:
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    """Ensure no real .env values bleed into these tests."""
+    """Ensure no real .env values bleed into these tests.
+
+    Set (not delete) the keys to empty: push_config() calls load_dotenv(), which
+    would otherwise re-read the developer's .env and repopulate a deleted key. An
+    already-present empty value is NOT overridden by load_dotenv (override=False),
+    so the fail-closed default holds even when push is activated locally.
+    """
     for key in ("PUSH_ENABLED", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"):
-        monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv(key, "")
 
 
 @pytest.fixture(autouse=True)
@@ -403,8 +409,11 @@ class TestIsPushEnabledTruthTable:
         assert is_push_enabled(_enabled_config(private_key=_PLACEHOLDER_PRIVATE_KEY)) is False
 
     def test_default_cfg_none_reads_env_and_is_false_when_unset(self, monkeypatch):
+        # Empty (not deleted): push_config()/is_push_enabled() call load_dotenv(),
+        # which would repopulate a deleted key from a real local .env. Empty and
+        # truly-unset yield an identical config here (getenv defaults are "").
         for key in ("PUSH_ENABLED", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"):
-            monkeypatch.delenv(key, raising=False)
+            monkeypatch.setenv(key, "")
         assert is_push_enabled() is False
 
 
@@ -415,8 +424,10 @@ class TestIsPushEnabledTruthTable:
 
 class TestPushConfig:
     def test_defaults_when_env_unset(self, monkeypatch):
+        # Empty (not deleted) so load_dotenv() inside push_config() cannot
+        # repopulate from a real local .env; the resolved config is identical.
         for key in ("PUSH_ENABLED", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"):
-            monkeypatch.delenv(key, raising=False)
+            monkeypatch.setenv(key, "")
         cfg = push_config()
         assert cfg == {
             "enabled": False,
