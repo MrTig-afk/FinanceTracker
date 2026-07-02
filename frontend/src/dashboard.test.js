@@ -57,7 +57,6 @@ const DOM_HTML = `
   <div id="message" hidden></div>
   <button id="refresh"></button>
   <input id="fuel-rule-toggle" type="checkbox" />
-  <div id="fuel-note"></div>
   <div id="balances"></div>
 `;
 
@@ -438,50 +437,6 @@ describe('fuel-rule toggle state', () => {
 });
 
 // ---------------------------------------------------------------------------
-// fuel-note — OFF/ON copy and singular/plural
-// ---------------------------------------------------------------------------
-
-describe('#fuel-note copy', () => {
-  it('OFF text mentions reclassifying N transactions (plural)', () => {
-    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: false, fuel_rule_eligible: 3 });
-    const text = document.getElementById('fuel-note').textContent;
-    expect(text).toContain('reclassify 3 transactions');
-  });
-
-  it('OFF text uses singular "transaction" when eligible === 1', () => {
-    dash.render({ ...SYNTHETIC_SUMMARY, fuel_rule_applied: false, fuel_rule_eligible: 1 });
-    const text = document.getElementById('fuel-note').textContent;
-    expect(text).toContain('reclassify 1 transaction.');
-    expect(text).not.toContain('1 transactions');
-  });
-
-  it('ON text mentions "moved to Dining Out" and the eligible count', () => {
-    dash.render({
-      ...SYNTHETIC_SUMMARY,
-      fuel_rule_applied: true,
-      fuel_rule_eligible: 3,
-      fuel_rule_eligible_amount: '-24.10',
-    });
-    const text = document.getElementById('fuel-note').textContent;
-    expect(text).toContain('moved to Dining Out');
-    expect(text).toContain('3 small servo purchases');
-    expect(text).toContain('$24.10');
-  });
-
-  it('ON text uses singular "purchase" when eligible === 1', () => {
-    dash.render({
-      ...SYNTHETIC_SUMMARY,
-      fuel_rule_applied: true,
-      fuel_rule_eligible: 1,
-      fuel_rule_eligible_amount: '-8.00',
-    });
-    const text = document.getElementById('fuel-note').textContent;
-    expect(text).toContain('1 small servo purchase ');
-    expect(text).not.toContain('1 small servo purchases');
-  });
-});
-
-// ---------------------------------------------------------------------------
 // pulse:true — transient highlight classes
 // ---------------------------------------------------------------------------
 
@@ -498,15 +453,9 @@ describe('render(summary, { pulse: true })', () => {
     expect(byCategory['Groceries'].classList.contains('pulse-hi')).toBe(false);
   });
 
-  it('adds .note-in to #fuel-note', () => {
-    dash.render(PULSE_SUMMARY, { pulse: true });
-    expect(document.getElementById('fuel-note').classList.contains('note-in')).toBe(true);
-  });
-
   it('does not add pulse classes when pulse is not passed (default false)', () => {
     dash.render(PULSE_SUMMARY);
     expect(document.querySelectorAll('.pulse-hi').length).toBe(0);
-    expect(document.getElementById('fuel-note').classList.contains('note-in')).toBe(false);
   });
 });
 

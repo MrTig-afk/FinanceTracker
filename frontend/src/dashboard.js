@@ -46,7 +46,6 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
   const spentTotalEl = root.getElementById('spent-total');
   const legendEl = root.getElementById('legend');
   const fuelToggleEl = root.getElementById('fuel-rule-toggle');
-  const fuelNoteEl = root.getElementById('fuel-note');
   const messageEl = root.getElementById('message');
   const balancesEl = root.getElementById('balances');
 
@@ -267,31 +266,12 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
   // Fuel card
   // -------------------------------------------------------------------------
 
-  function _renderFuelNote(summary) {
-    if (!fuelToggleEl && !fuelNoteEl) return;
-
-    const applied = Boolean(summary.fuel_rule_applied);
-    if (fuelToggleEl) fuelToggleEl.checked = applied;
-
-    if (!fuelNoteEl) return;
-
-    const n = summary.fuel_rule_eligible ?? 0;
-    const amount = summary.fuel_rule_eligible_amount ?? '0.00';
-
-    let text;
-    if (applied) {
-      text =
-        `${n} small servo purchase${n === 1 ? '' : 's'} ` +
-        `(${formatCurrency(Math.abs(Number(amount) || 0))}) moved to Dining Out and saved to your ledger.`;
-    } else {
-      text =
-        'Off — small servo purchases stay under Transport. Turn on to reclassify ' +
-        `${n} transaction${n === 1 ? '' : 's'}.`;
-    }
-
-    fuelNoteEl.textContent = text;
-    fuelNoteEl.classList.toggle('fuel-note--on', applied);
-    fuelNoteEl.classList.toggle('fuel-note--off', !applied);
+  // Sync the toggle to the backend's actual rule state. The user-facing
+  // confirmation is a transient toast fired on the toggle action (see
+  // fuelToast.js, wired in main.js) — not a rendered note here.
+  function _syncFuelToggle(summary) {
+    if (!fuelToggleEl) return;
+    fuelToggleEl.checked = Boolean(summary.fuel_rule_applied);
   }
 
   // -------------------------------------------------------------------------
@@ -341,13 +321,11 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
         }
       });
     }
-    if (fuelNoteEl) fuelNoteEl.classList.add('note-in');
 
     pulseTimeoutId = setTimeout(() => {
       if (legendEl) {
         legendEl.querySelectorAll('.pulse-hi').forEach((el) => el.classList.remove('pulse-hi'));
       }
-      if (fuelNoteEl) fuelNoteEl.classList.remove('note-in');
       pulseTimeoutId = null;
     }, PULSE_DURATION_MS);
   }
@@ -469,8 +447,8 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
       _renderLegend(data, total);
     }
 
-    // Fuel card
-    _renderFuelNote(summary);
+    // Fuel card — keep the toggle in sync with the backend's rule state.
+    _syncFuelToggle(summary);
 
     // Per-account balances (local-only)
     _renderBalances(summary);
@@ -502,11 +480,6 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
     lastDisplayedTotal = 0;
     _showMessage('No data yet — upload a statement to get started.');
     if (fuelToggleEl) fuelToggleEl.checked = false;
-    if (fuelNoteEl) {
-      fuelNoteEl.textContent = 'No spending data yet.';
-      fuelNoteEl.classList.remove('fuel-note--on');
-      fuelNoteEl.classList.add('fuel-note--off');
-    }
     if (balancesEl) balancesEl.textContent = '';
   }
 

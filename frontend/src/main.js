@@ -6,6 +6,7 @@
 
 import { fetchSummary, fetchStatus, postReclassify, postPushSubscribe, postPushUnsubscribe } from './api.js';
 import { createDashboard } from './dashboard.js';
+import { createFuelToast } from './fuelToast.js';
 import { createQueue } from './queue.js';
 import { createUploadController } from './uploadController.js';
 import { postUpload } from './upload.js';
@@ -58,6 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
     onCategorySelect: (category, meta) => categoryDrawer.open(category, meta),
   });
   const overviewTrend = createOverviewTrend({ root: document });
+  const fuelToast = createFuelToast(document);
   const statusDot = document.getElementById('status-dot');
   const refreshBtn = document.getElementById('refresh');
   const fuelToggle = document.getElementById('fuel-rule-toggle');
@@ -187,8 +189,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // -------------------------------------------------------------------------
   if (fuelToggle) {
     fuelToggle.addEventListener('change', async () => {
+      const enabled = fuelToggle.checked;
       try {
-        renderSummary(await postReclassify(fuelToggle.checked), { pulse: true });
+        const summary = await postReclassify(enabled);
+        renderSummary(summary, { pulse: true });
+        // Confirm the user's toggle action with a transient top-right toast,
+        // using the real eligible-count / amount from the reclassify response.
+        fuelToast.show(enabled, {
+          count: summary.fuel_rule_eligible ?? 0,
+          amount: summary.fuel_rule_eligible_amount ?? '0.00',
+        });
       } catch (err) {
         dash.showError(err);
         load();

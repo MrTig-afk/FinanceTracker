@@ -54,17 +54,6 @@
   }
 }
 
-@keyframes ftNoteIn {
-  from {
-    opacity: 0;
-    transform: translateY(7px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 @keyframes ftGlow {
   0%,
   100% {
@@ -715,26 +704,137 @@ a.nav-item {
   opacity: 0.8;
 }
 
-.fuel-note {
-  margin-top: auto;
-  padding: 13px 15px;
-  border-radius: 12px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  color: var(--muted);
-  transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+/* ── Fuel-rule toast (top-right slide-in confirmation) ──────── */
+.toast-region {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
 }
 
-.fuel-note.fuel-note--on {
-  background: color-mix(in srgb, #e0913f 12%, transparent);
-  border-color: color-mix(in srgb, #e0913f 35%, transparent);
+.toast {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 340px;
+  max-width: calc(100vw - 40px);
+  padding: 14px 16px 17px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.7);
+  opacity: 0;
+  transform: translateX(24px);
+  transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: auto;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.toast-accent {
+  width: 3px;
+  align-self: stretch;
+  border-radius: 3px;
+  background: #e0913f;
+  flex: none;
+}
+
+.toast--off .toast-accent {
+  background: #34a7a3;
+}
+
+.toast-body {
+  min-width: 0;
+}
+
+.toast-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 700;
   color: var(--text);
 }
 
-.fuel-note.note-in {
-  animation: ftNoteIn 0.5s ease;
+.toast-title .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e0913f;
+  flex: none;
+}
+
+.toast--off .toast-title .dot {
+  background: #34a7a3;
+}
+
+.toast-text {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.toast-text strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* thin countdown bar showing the ~5s auto-fade */
+.toast-timer {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 7px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, #e0913f 30%, transparent);
+  overflow: hidden;
+}
+
+.toast--off .toast-timer {
+  background: color-mix(in srgb, #34a7a3 30%, transparent);
+}
+
+.toast-timer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #e0913f;
+  transform-origin: left;
+  animation: toastCountdown 5s linear forwards;
+}
+
+.toast--off .toast-timer::after {
+  background: #34a7a3;
+}
+
+@keyframes toastCountdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    transition: opacity 0.001ms;
+    transform: none;
+  }
+  .toast-timer::after {
+    animation: none;
+    transform: scaleX(0);
+  }
 }
 
 /* ── Account balances card (local-only) ─────────────────────── */
