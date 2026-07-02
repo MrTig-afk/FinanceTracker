@@ -52,7 +52,9 @@ def build_prompt(
         "You are a financial transaction categoriser. "
         f"Categorise each transaction into exactly one of these categories: {taxonomy_labels}. "
         "Use the exact category spelling. "
-        "Respond with JSON only — no prose, no markdown fences. "
+        "Match merchant names case-insensitively: treat 'ROZZIS', 'Rozzis' and "
+        "'rozzis' as the same merchant. "
+        "Respond with JSON only, no prose, no markdown fences. "
         "Use this exact JSON schema:\n"
         "{\n"
         '  "categories": {"<row_index>": "<Category>", ...},\n'

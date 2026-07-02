@@ -37,21 +37,33 @@ DEFAULT_CONTEXT: tuple[CategoryContext, ...] = (
         name="Utilities",
         color="#4a90d9",
         hints=(
-            "AGL, Origin Energy, EnergyAustralia, electricity, gas and water. "
-            "Internet and mobile: Aussie Broadband, Telstra, Optus."
+            "AGL, Origin Energy, EnergyAustralia, Red Energy, Alinta, electricity, "
+            "gas and water. Internet and mobile: MORE, Aussie Broadband, Telstra, "
+            "Optus, TPG, iiNet, Vodafone, Aldi Mobile, Belong."
         ),
         position=1,
     ),
     CategoryContext(
         name="Rent",
         color="#9b6cd4",
-        hints="Weekly or fortnightly transfers to a real estate agent or landlord. Bond payments.",
+        hints=(
+            "Regular rent, usually monthly (sometimes weekly or fortnightly), paid to a "
+            "real estate agent, property manager or landlord. Common agents and platforms: "
+            "MICM, Apartment Living, Ray White, LJ Hooker, Harcourts, Barry Plant, McGrath, "
+            "realestate.com.au, Domain, Ailo. Includes bond and deposit payments."
+        ),
         position=2,
     ),
     CategoryContext(
         name="Dining Out",
         color="#e0913f",
-        hints="Cafes, restaurants, pubs and takeaway. Uber Eats, DoorDash, Menulog, coffee shops.",
+        hints=(
+            "Cafes, restaurants, pubs and takeaway, including named eateries even "
+            "when the name mentions food ingredients (e.g. 'spices', 'meats', "
+            "'bakery'). Rozzi's, Southbank Spices. Many cafes and takeaways bill "
+            "via Square, shown as 'SQ *<merchant>'. Uber Eats, DoorDash, Menulog, "
+            "coffee shops."
+        ),
         position=3,
     ),
     CategoryContext(
@@ -69,7 +81,11 @@ DEFAULT_CONTEXT: tuple[CategoryContext, ...] = (
     CategoryContext(
         name="Subscriptions",
         color="#6f6bd8",
-        hints="Netflix, Spotify, Disney+, Amazon Prime, iCloud storage, gym memberships.",
+        hints=(
+            "Netflix, Spotify, Disney+, Amazon Prime, iCloud storage, gym memberships. "
+            "Also AI tools and services like OpenAI (ChatGPT), Anthropic (Claude), "
+            "Perplexity, Google Gemini, GitHub Copilot, Cursor."
+        ),
         position=6,
     ),
     CategoryContext(
