@@ -25,7 +25,7 @@ if (-not (Test-Path $activate)) {
 # Read BACKEND_HOST and BACKEND_PORT from .env (if present); use defaults otherwise.
 # Only these two non-sensitive values are needed before Python starts.
 $bindHost = "0.0.0.0"
-$bindPort = "8000"
+$bindPort = "8010"
 $envFile = Join-Path $repo ".env"
 if (Test-Path $envFile) {
     foreach ($line in Get-Content $envFile) {

@@ -60,9 +60,20 @@ frontend/          Vite PWA: sidebar shell, light/dark theming, animated donut, 
 service/           Windows Task Scheduler auto-start scripts
 ```
 
-## Getting started
+## What you need
 
-Prerequisites: Python 3.11+, Node 18+, and a free OpenRouter API key. A Google Drive service account is optional (Excel upload is config gated and is skipped if not configured).
+Required:
+
+- **Python 3.11+** and **Node 18+**.
+- **An OpenRouter API key** (free). Sign up at [openrouter.ai](https://openrouter.ai), create a key, and disable prompt logging/training in your account's privacy settings. Categorisation runs on free-tier models, so there is no per-call cost.
+
+Optional. Each of these gates a feature that is simply skipped or inert while unconfigured:
+
+- **Google Drive service account**, for uploading the monthly Excel workbook. In Google Cloud console: create a project, enable the Drive API, create a service account, download its JSON key, and share the target Drive folder with the service account's email address.
+- **VAPID key pair**, for phone push notifications. `pip install pywebpush`, generate with `vapid --gen`, and fill the three `VAPID_*` values in `.env`. Push stays fully inert while `PUSH_ENABLED=false`.
+- **Tailscale** on the laptop and the phone (free Personal plan), for private phone access. Without it the app is desktop-only.
+
+## Getting started
 
 ### 1. Backend
 
@@ -74,7 +85,7 @@ pip install -r requirements.txt
 
 cp .env.example .env      # then fill in the values (see Configuration below)
 
-python -m uvicorn backend.app:app --host 0.0.0.0 --port 8000
+python -m uvicorn backend.app:app --host 0.0.0.0 --port 8010
 ```
 
 ### 2. Frontend
@@ -89,6 +100,37 @@ npm run dev
 ### 3. Use it
 
 Open the dashboard, upload your CommBank and Westpac CSVs, and the backend parses, sanitises, categorises, stores, and returns a breakdown. Re-running on unchanged files is a no-op (no categorisation call, no changed output).
+
+### 4. Phone access (production build over Tailscale)
+
+The installable phone PWA needs HTTPS (service worker and push both require it), which Tailscale provides privately inside your own tailnet. Nothing is exposed to the public internet.
+
+1. Install Tailscale on the laptop and the phone, sign in to the same tailnet, and enable MagicDNS and HTTPS certificates in the Tailscale admin console. Note your machine's DNS name (`<machine>.<tailnet>.ts.net`).
+2. Create `frontend/.env.production` (gitignored) with the production values, then build:
+
+   ```bash
+   # frontend/.env.production
+   VITE_API_BASE=https://<machine>.<tailnet>.ts.net:8443
+   VITE_VAPID_PUBLIC_KEY=<your public key, only if using push>
+
+   cd frontend && npm run build
+   ```
+
+3. Allow the phone origin to call the API, in `.env`:
+
+   ```
+   CORS_ALLOW_ORIGINS=https://<machine>.<tailnet>.ts.net
+   ```
+
+4. Map two tailnet-only HTTPS listeners to the local servers (these persist across reboots):
+
+   ```
+   tailscale serve --bg --https=443  http://127.0.0.1:4173
+   tailscale serve --bg --https=8443 http://127.0.0.1:8010
+   ```
+
+5. Serve `frontend/dist` on port 4173. The always-on service below does this for you; manually it is `python -m http.server 4173 --bind 127.0.0.1 --directory frontend/dist`.
+6. On the phone, open `https://<machine>.<tailnet>.ts.net/` in the browser and add it to the Home Screen (on iOS: Safari, Share, Add to Home Screen - required for push, iOS 16.4+). Open it from the Home Screen icon.
 
 ## Dashboard
 
@@ -111,11 +153,13 @@ All backend config lives in `.env` (gitignored). Copy `.env.example` and fill it
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Path to a Drive service-account key file (optional). Upload is skipped if absent. |
 | `DRIVE_FOLDER_ID` | Target Drive folder for the workbook (optional). |
 | `SQLITE_PATH`, `INBOX_DIR`, `OUTPUT_DIR`, `LOG_DIR` | Local paths, all gitignored. |
-| `BACKEND_HOST`, `BACKEND_PORT` | Bind address and port. |
+| `BACKEND_HOST`, `BACKEND_PORT` | Bind address and port (examples in this readme use `8010`). |
+| `CORS_ALLOW_ORIGINS` | Comma-separated origins allowed to call the API. Set your tailnet URL here for phone access. |
+| `PUSH_ENABLED`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Web Push notifications. Fully inert while `PUSH_ENABLED=false`. |
 
 The LLM model is config, not code. Swap models by editing `.env`, no code change.
 
-Frontend config is non-secret. The only value is `VITE_API_BASE` (defaults to `http://localhost:8000`). Never put a key or credential in any frontend file.
+Frontend config is non-secret: `VITE_API_BASE` (backend URL) and `VITE_VAPID_PUBLIC_KEY` (the public half of the VAPID pair, safe to bake into the build). Put dev values in `frontend/.env`, phone-build values in `frontend/.env.production`. Never put a key or credential in any frontend file.
 
 ## Bank CSV formats
 
@@ -128,7 +172,7 @@ Format knowledge lives in per-bank profiles, so a wrong assumption is a one-plac
 
 ## Categories
 
-A fixed, editable taxonomy: Groceries, Utilities, Rent, Dining Out, Transport, Entertainment, Subscriptions, Income, Other.
+A fixed taxonomy of eight: Groceries, Housing, Dining Out, Transport, Entertainment, Subscriptions, Income, Other. Housing covers rent and utilities. Each category also carries editable merchant hints (the Categories screen) that are prepended to the categorisation prompt, and one-tap corrections from the drill-down drawer can opt in to feed few-shot examples back into future runs.
 
 ## Tests
 
@@ -142,13 +186,33 @@ cd frontend && npm test
 
 Tests use synthetic data generated in code, never real transactions. The suite makes no live network calls: the OpenRouter client is mocked.
 
-## Always-on service (Windows)
+## Always-on service
 
-`service/` contains a Task Scheduler definition and a small supervisor (`service/supervisor.py`, run under `pythonw.exe` so no console window appears) that keeps the backend and the built PWA server running: it starts on login and on unlock, and relaunches either server if it stops. Install it once with `pwsh .\service\register-task.ps1` (remove with `-Unregister`). On macOS or Linux you would use launchd or systemd instead.
+The app is most useful when the backend and the built PWA server are simply always running, so the phone works whenever the laptop is on. On Windows, `service/` ships everything needed:
 
-## Scope and roadmap
+```powershell
+pwsh .\service\register-task.ps1     # one-time install; remove with -Unregister
+```
 
-This is v1: the core upload to breakdown loop, plus the redesigned dashboard, the small-fuel-stop reclassification toggle, and content-based bank detection. Planned next is a "category context" screen where you keep per-category merchant hints that get prepended to the categorisation prompt. Later versions add a yearly and month-over-month history view, category trend charts, phone push notifications, and budget alerts.
+That registers a single Task Scheduler task named `FinanceTracker`. If you prefer to create the task by hand (or want to audit what the script does), this is everything it contains:
+
+| Piece | Value |
+|---|---|
+| Action | `<repo>\venv\Scripts\pythonw.exe "<repo>\service\supervisor.py"`, working directory `<repo>` |
+| Triggers | At log on, and on workstation unlock |
+| Security | Run only when the user is logged on, lowest privileges (no admin) |
+| Settings | One instance only (ignore new); restart on failure 3 times, 1 minute apart; no execution time limit; run task as soon as possible after a missed start; do not stop on battery |
+
+Two design points worth copying if you roll your own:
+
+- **`pythonw.exe`, not `python.exe` or PowerShell.** `pythonw` is the console-less Python, so no terminal window can ever appear. Launching via `powershell.exe -WindowStyle Hidden` can still show a window when Windows Terminal is the default console host, and closing that window kills the server.
+- **The task runs a supervisor, not the servers directly.** `service/supervisor.py` probes the backend port (`BACKEND_PORT` from `.env`) and the web port (4173) every 15 seconds and relaunches whichever server is down, logging to `logs/` (gitignored). Cost is roughly 15 MB of RAM and no measurable CPU. It also runs in a normal console for testing: `venv\Scripts\python.exe service\supervisor.py`.
+
+On macOS, use a launchd LaunchAgent with `RunAtLoad` and `KeepAlive`; on Linux, a systemd user service with `Restart=always`. Point either at `venv/bin/python service/supervisor.py` and the same behaviour follows.
+
+## Feature set
+
+The current build covers the full loop described above, plus: monthly and yearly views with period-over-period changes, category trend charts, a category drill-down drawer with one-tap corrections, per-category merchant hints, notifications (in-app toasts while the app is focused, Web Push when backgrounded), a Settings tab (per-notification-type toggles, CSV backup and reset, categoriser test, learned-corrections management), `.xlsx` statement upload, and content-based bank detection.
 
 ## License
 
