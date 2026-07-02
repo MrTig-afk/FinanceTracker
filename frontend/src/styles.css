@@ -1584,15 +1584,206 @@ a.nav-item {
   color: var(--muted);
 }
 
-/* ── Trends view (v2 Pass 2) ──────────────────────────────── */
-.trends-chart-card {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: center;
+/* ── Trends view — inline-SVG line chart + right-side legend ─ */
+/* Full-bleed layout: chart takes all remaining width, legend is a fixed
+   column with a left hairline (mirrors the Overview donut legend idiom). */
+.trends-layout {
+  display: grid;
+  grid-template-columns: 1fr 244px;
+  gap: 26px;
+  align-items: stretch;
 }
 
-.trends-chart-card canvas {
-  max-width: 100%;
+.trends-chart-col {
+  min-width: 0;
+}
+
+.trends-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.trends-svg .grid-line {
+  stroke: var(--border);
+  stroke-width: 1;
+  opacity: 0.7;
+}
+
+.trends-svg .axis-label {
+  fill: var(--muted);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+.trends-svg .x-label {
+  fill: var(--muted);
+  font-size: 12px;
+}
+
+/* Series group: line + wide invisible hit target + points. */
+.trends-svg .s-group {
+  transition: opacity 0.18s ease;
+  cursor: pointer;
+}
+
+.trends-svg .s-line {
+  fill: none;
+  stroke-width: 2.25;
+  transition: stroke-width 0.18s ease;
+}
+
+.trends-svg .s-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 20;
+}
+
+.trends-svg .s-pt {
+  stroke: var(--surface);
+  stroke-width: 1.5;
+  transition: r 0.18s ease;
+}
+
+.trends-svg .s-group.dim {
+  opacity: 0.12;
+}
+
+.trends-svg .s-group.hot .s-line {
+  stroke-width: 3.5;
+}
+
+.trends-svg .s-group.hide {
+  display: none;
+}
+
+/* Legend as a clean vertical column of rows. */
+.trends-legend-col {
+  border-left: 1px solid var(--border);
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+.trends-legend-head {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+}
+
+.trends-legend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.trends-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  transition: background 0.15s ease, opacity 0.18s ease, box-shadow 0.15s ease;
+}
+
+.trends-legend-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: 0 0 0 3px transparent;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.trends-legend-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trends-legend-val {
+  font-size: 13px;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.trends-legend-row.dim {
+  opacity: 0.32;
+}
+
+.trends-legend-row.hot {
+  background: var(--hl);
+  box-shadow: inset 3px 0 0 0 var(--hl-ring);
+}
+
+.trends-legend-row.hot .trends-legend-dot {
+  box-shadow: 0 0 0 5px var(--hl-ring);
+  transform: scale(1.15);
+}
+
+.trends-legend-row.hot .trends-legend-val {
+  color: var(--text);
+}
+
+.trends-legend-row.off {
+  opacity: 0.45;
+}
+
+.trends-legend-row.off .trends-legend-name {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.trends-legend-row.off .trends-legend-dot {
+  box-shadow: inset 0 0 0 2px var(--muted);
+  background: transparent !important;
+}
+
+.trends-legend-foot {
+  margin-top: auto;
+  padding-top: 14px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/* Stack the legend under the chart on narrow screens. */
+@media (max-width: 720px) {
+  .trends-layout {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .trends-legend-col {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    padding-left: 0;
+    padding-top: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trends-svg .s-group,
+  .trends-svg .s-line,
+  .trends-svg .s-pt,
+  .trends-legend-row,
+  .trends-legend-dot {
+    transition: none;
+  }
 }
 
 /* ── Overview mini spend-over-time bar (v2 Pass 2) ───────── */

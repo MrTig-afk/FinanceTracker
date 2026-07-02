@@ -1,39 +1,17 @@
 /**
  * trendsController.test.js — DOM wiring tests for trendsController.js.
- * Chart.js is mocked via vi.mock (hoisted) so no real canvas is needed.
- * A fake `fetchFn` is injected — no real network. All fixtures are
- * SYNTHETIC (invented categories/amounts), never real transaction data.
+ *
+ * The Trends chart is a hand-built inline SVG (no charting library), so there
+ * is nothing to mock — a fake `fetchFn` is injected (no real network) and the
+ * rendered SVG / legend DOM is asserted directly. All fixtures are SYNTHETIC
+ * (invented categories/amounts), never real transaction data.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi } from 'vitest';
 
-// ---------------------------------------------------------------------------
-// Mock chart.js BEFORE trendsController.js is imported (hoisted by Vitest).
-// ---------------------------------------------------------------------------
-
-vi.mock('chart.js', () => {
-  const Chart = vi.fn(function () {
-    return {
-      destroy: vi.fn(),
-      update: vi.fn(),
-    };
-  });
-  Chart.register = vi.fn();
-  return {
-    Chart,
-    LineController: {},
-    LineElement: {},
-    PointElement: {},
-    CategoryScale: {},
-    LinearScale: {},
-    Legend: {},
-    Tooltip: {},
-  };
-});
-
-import { Chart } from 'chart.js';
 import { createTrends } from './trendsController.js';
-import { colorFor, monthLabel } from './summary.js';
+import { colorFor, formatCurrency } from './summary.js';
 
 // ---------------------------------------------------------------------------
 // DOM template — mirrors the Trends view markup in index.html.
@@ -42,7 +20,18 @@ import { colorFor, monthLabel } from './summary.js';
 const TRENDS_HTML = `
   <select id="trends-window"></select>
   <p id="trends-message" hidden></p>
-  <canvas id="trends-canvas" width="720" height="360"></canvas>
+  <section class="card trends-card">
+    <div class="trends-layout">
+      <div class="trends-chart-col">
+        <svg id="trends-chart" class="trends-svg" viewBox="0 0 900 400"></svg>
+      </div>
+      <div class="trends-legend-col">
+        <div class="trends-legend-head">Categories</div>
+        <div class="trends-legend-list" id="trends-legend"></div>
+        <div class="trends-legend-foot"></div>
+      </div>
+    </div>
+  </section>
 `;
 
 // ---------------------------------------------------------------------------
@@ -69,9 +58,7 @@ const SINGLE_MONTH_TRENDS = {
   window: 6,
   end_month: '2026-06',
   months: ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06'],
-  series: [
-    { category: 'Groceries', values: ['0.00', '0.00', '0.00', '0.00', '0.00', '-50.00'] },
-  ],
+  series: [{ category: 'Groceries', values: ['0.00', '0.00', '0.00', '0.00', '0.00', '-50.00'] }],
   spend_by_month: ['0.00', '0.00', '0.00', '0.00', '0.00', '50.00'],
   months_available: 1,
 };
@@ -86,15 +73,12 @@ const EMPTY_TRENDS = {
 };
 
 // A populated window where every dataset value is exactly zero (after
-// building datasets, excluding Income) — must also show the empty state,
-// WITHOUT ever constructing a Chart.
+// excluding Income) — must also show the empty state, WITHOUT rendering lines.
 const ALL_ZERO_TRENDS = {
   window: 3,
   end_month: '2026-06',
   months: ['2026-04', '2026-05', '2026-06'],
-  series: [
-    { category: 'Groceries', values: ['0.00', '0.00', '0.00'] },
-  ],
+  series: [{ category: 'Groceries', values: ['0.00', '0.00', '0.00'] }],
   spend_by_month: ['0.00', '0.00', '0.00'],
   months_available: 3,
 };
@@ -103,9 +87,25 @@ const _NOT_ENOUGH_HISTORY = 'Not enough history yet. Upload at least two months 
 
 let controller;
 
+const $ = (id) => document.getElementById(id);
+const groups = () => [...$('trends-chart').querySelectorAll('.s-group')];
+const groupFor = (name) => $('trends-chart').querySelector(`.s-group[data-line="${name}"]`);
+const rows = () => [...$('trends-legend').querySelectorAll('.trends-legend-row')];
+const rowFor = (name) =>
+  rows().find((r) => r.dataset.legend === name);
+
+function hover(el) {
+  el.dispatchEvent(new Event('mouseenter'));
+}
+function unhover(el) {
+  el.dispatchEvent(new Event('mouseleave'));
+}
+function click(el) {
+  el.dispatchEvent(new Event('click'));
+}
+
 beforeEach(() => {
   document.body.innerHTML = TRENDS_HTML;
-  Chart.mockClear();
 });
 
 afterEach(() => {
@@ -128,59 +128,78 @@ describe('load() happy path', () => {
     expect(fetchFn).toHaveBeenCalledWith(undefined);
   });
 
-  it('constructs exactly one Chart instance', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
-    controller = createTrends({ root: document, fetchFn });
-    await controller.load();
-    expect(Chart).toHaveBeenCalledTimes(1);
-  });
-
   it('hides the message banner', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
-    expect(document.getElementById('trends-message').hidden).toBe(true);
+    expect($('trends-message').hidden).toBe(true);
   });
 
-  it('builds one dataset per NON-Income series (excludes Income)', async () => {
+  it('renders one series group per NON-Income series (excludes Income)', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const config = Chart.mock.calls[0][1];
-    const labels = config.data.datasets.map((d) => d.label);
-    expect(labels).toEqual(['Groceries', 'Transport']);
-    expect(labels).not.toContain('Income');
+    const names = groups().map((g) => g.dataset.line);
+    expect(names).toEqual(['Groceries', 'Transport']);
+    expect(names).not.toContain('Income');
   });
 
-  it('maps chart labels via monthLabel(months)', async () => {
+  it('renders one legend row per NON-Income series', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const config = Chart.mock.calls[0][1];
-    expect(config.data.labels).toEqual(CANNED_TRENDS.months.map(monthLabel));
+    const names = rows().map((r) => r.dataset.legend);
+    expect(names).toEqual(['Groceries', 'Transport']);
   });
 
-  it('sets dataset colours via colorFor(category)', async () => {
+  it('colours each series line with colorFor(category)', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const config = Chart.mock.calls[0][1];
-    const groceries = config.data.datasets.find((d) => d.label === 'Groceries');
-    expect(groceries.borderColor).toBe(colorFor('Groceries'));
-    expect(groceries.backgroundColor).toBe(colorFor('Groceries'));
+    const line = groupFor('Groceries').querySelector('.s-line');
+    expect(line.getAttribute('stroke')).toBe(colorFor('Groceries'));
   });
 
-  it('dataset data values are Math.abs of the series values', async () => {
+  it('legend value shows the latest-month magnitude, currency-formatted', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const config = Chart.mock.calls[0][1];
-    const groceries = config.data.datasets.find((d) => d.label === 'Groceries');
-    expect(groceries.data).toEqual([100, 90, 80, 95, 85, 92]);
+    // Groceries latest value is '-92.00' -> abs 92 -> formatted.
+    const val = rowFor('Groceries').querySelector('.trends-legend-val');
+    expect(val.textContent).toBe(formatCurrency(92));
+  });
+
+  it('draws one point circle per month for each series', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
+    controller = createTrends({ root: document, fetchFn });
+    await controller.load();
+
+    expect(groupFor('Groceries').querySelectorAll('.s-pt').length).toBe(6);
+  });
+
+  it('draws 5 gridlines and mono y-axis labels', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
+    controller = createTrends({ root: document, fetchFn });
+    await controller.load();
+
+    const svg = $('trends-chart');
+    expect(svg.querySelectorAll('.grid-line').length).toBe(5);
+    expect(svg.querySelectorAll('.axis-label').length).toBe(5);
+  });
+
+  it('renders x-axis labels as month abbreviations', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
+    controller = createTrends({ root: document, fetchFn });
+    await controller.load();
+
+    const labels = [...$('trends-chart').querySelectorAll('.x-label')].map((t) => t.textContent);
+    expect(labels.length).toBe(6);
+    // 'Jan' style abbreviation (locale-derived, matches the controller helper).
+    expect(labels[0]).toBe(new Date(2026, 0, 1).toLocaleString('en-AU', { month: 'short' }));
   });
 
   it('populates the window <select> with [3, 6, 12, 24] labelled "N months"', async () => {
@@ -188,8 +207,7 @@ describe('load() happy path', () => {
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const select = document.getElementById('trends-window');
-    const options = [...select.options];
+    const options = [...$('trends-window').options];
     expect(options.map((o) => o.value)).toEqual(['3', '6', '12', '24']);
     expect(options.map((o) => o.textContent)).toEqual(['3 months', '6 months', '12 months', '24 months']);
   });
@@ -198,9 +216,7 @@ describe('load() happy path', () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
-
-    const select = document.getElementById('trends-window');
-    expect(select.value).toBe('6');
+    expect($('trends-window').value).toBe('6');
   });
 
   it('does not re-populate the <select> on a second load', async () => {
@@ -208,9 +224,7 @@ describe('load() happy path', () => {
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
     await controller.load();
-
-    const select = document.getElementById('trends-window');
-    expect(select.options.length).toBe(4);
+    expect($('trends-window').options.length).toBe(4);
   });
 });
 
@@ -219,65 +233,51 @@ describe('load() happy path', () => {
 // ---------------------------------------------------------------------------
 
 describe('insufficient history (months_available <= 1)', () => {
-  it('does NOT construct a Chart instance', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(SINGLE_MONTH_TRENDS);
-    controller = createTrends({ root: document, fetchFn });
-    await controller.load();
-    expect(Chart).not.toHaveBeenCalled();
-  });
-
-  it('shows the exact insufficient-history message', async () => {
+  it('renders no series and shows the exact insufficient-history message', async () => {
     const fetchFn = vi.fn().mockResolvedValue(SINGLE_MONTH_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const msg = document.getElementById('trends-message');
+    expect(groups().length).toBe(0);
+    const msg = $('trends-message');
     expect(msg.hidden).toBe(false);
     expect(msg.textContent).toBe(_NOT_ENOUGH_HISTORY);
   });
 });
 
 describe('empty response (months.length === 0)', () => {
-  it('does NOT construct a Chart instance', async () => {
+  it('renders no series and shows the exact insufficient-history message', async () => {
     const fetchFn = vi.fn().mockResolvedValue(EMPTY_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
-    expect(Chart).not.toHaveBeenCalled();
-  });
 
-  it('shows the exact insufficient-history message', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(EMPTY_TRENDS);
-    controller = createTrends({ root: document, fetchFn });
-    await controller.load();
-    expect(document.getElementById('trends-message').textContent).toBe(_NOT_ENOUGH_HISTORY);
+    expect(groups().length).toBe(0);
+    expect($('trends-message').textContent).toBe(_NOT_ENOUGH_HISTORY);
   });
 });
 
 describe('all-zero datasets (populated window, every value zero)', () => {
-  it('does NOT construct a Chart instance', async () => {
+  it('renders no series and shows the exact insufficient-history message', async () => {
     const fetchFn = vi.fn().mockResolvedValue(ALL_ZERO_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
-    expect(Chart).not.toHaveBeenCalled();
+
+    expect(groups().length).toBe(0);
+    expect($('trends-message').textContent).toBe(_NOT_ENOUGH_HISTORY);
   });
 
-  it('shows the exact insufficient-history message', async () => {
-    const fetchFn = vi.fn().mockResolvedValue(ALL_ZERO_TRENDS);
-    controller = createTrends({ root: document, fetchFn });
-    await controller.load();
-    expect(document.getElementById('trends-message').textContent).toBe(_NOT_ENOUGH_HISTORY);
-  });
-
-  it('destroys a previously-rendered chart when transitioning to all-zero', async () => {
-    const fetchFn = vi.fn()
+  it('clears a previously-rendered chart when transitioning to all-zero', async () => {
+    const fetchFn = vi
+      .fn()
       .mockResolvedValueOnce(CANNED_TRENDS)
       .mockResolvedValueOnce(ALL_ZERO_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
-    const instance = Chart.mock.results[0].value;
+    expect(groups().length).toBe(2);
 
     await controller.load();
-    expect(instance.destroy).toHaveBeenCalledOnce();
+    expect(groups().length).toBe(0);
+    expect(rows().length).toBe(0);
   });
 });
 
@@ -291,7 +291,7 @@ describe('fetch failure', () => {
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const msg = document.getElementById('trends-message');
+    const msg = $('trends-message');
     expect(msg.hidden).toBe(false);
     expect(msg.textContent).toBe('Could not load trends.');
     expect(msg.textContent).not.toContain('SYNTH_SECRET_STACK_DETAIL');
@@ -303,11 +303,11 @@ describe('fetch failure', () => {
     await expect(controller.load()).resolves.not.toThrow();
   });
 
-  it('does not construct a Chart instance', async () => {
+  it('renders no series', async () => {
     const fetchFn = vi.fn().mockRejectedValue(new Error('boom'));
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
-    expect(Chart).not.toHaveBeenCalled();
+    expect(groups().length).toBe(0);
   });
 });
 
@@ -321,10 +321,9 @@ describe('<select> change', () => {
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
 
-    const twelveMonths = { ...CANNED_TRENDS, window: 12 };
-    fetchFn.mockResolvedValueOnce(twelveMonths);
+    fetchFn.mockResolvedValueOnce({ ...CANNED_TRENDS, window: 12 });
 
-    const select = document.getElementById('trends-window');
+    const select = $('trends-window');
     select.value = '12';
     select.dispatchEvent(new Event('change'));
     await new Promise((r) => setTimeout(r, 0));
@@ -334,18 +333,110 @@ describe('<select> change', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Spotlight (hover) — bidirectional line <-> legend highlight
+// ---------------------------------------------------------------------------
+
+describe('hover spotlight', () => {
+  beforeEach(async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
+    controller = createTrends({ root: document, fetchFn });
+    await controller.load();
+  });
+
+  it('hovering a line makes it hot and dims the others (both sides)', () => {
+    hover(groupFor('Groceries'));
+
+    expect(groupFor('Groceries').classList.contains('hot')).toBe(true);
+    expect(groupFor('Transport').classList.contains('dim')).toBe(true);
+    expect(rowFor('Groceries').classList.contains('hot')).toBe(true);
+    expect(rowFor('Transport').classList.contains('dim')).toBe(true);
+  });
+
+  it('mouseleave clears the spotlight', () => {
+    hover(groupFor('Groceries'));
+    unhover(groupFor('Groceries'));
+
+    expect(groupFor('Groceries').classList.contains('hot')).toBe(false);
+    expect(groupFor('Transport').classList.contains('dim')).toBe(false);
+    expect(rowFor('Transport').classList.contains('dim')).toBe(false);
+  });
+
+  it('hovering a legend row highlights the matching line (bidirectional)', () => {
+    hover(rowFor('Transport'));
+
+    expect(groupFor('Transport').classList.contains('hot')).toBe(true);
+    expect(rowFor('Transport').classList.contains('hot')).toBe(true);
+    expect(groupFor('Groceries').classList.contains('dim')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Click-to-hide + restore (per-series `hidden` set)
+// ---------------------------------------------------------------------------
+
+describe('click to hide / restore', () => {
+  beforeEach(async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
+    controller = createTrends({ root: document, fetchFn });
+    await controller.load();
+  });
+
+  it('clicking a line hides just that series and marks its row off', () => {
+    click(groupFor('Groceries'));
+
+    expect(groupFor('Groceries').classList.contains('hide')).toBe(true);
+    expect(rowFor('Groceries').classList.contains('off')).toBe(true);
+    // The other series stays put.
+    expect(groupFor('Transport').classList.contains('hide')).toBe(false);
+    expect(rowFor('Transport').classList.contains('off')).toBe(false);
+  });
+
+  it('clicking again restores the series', () => {
+    click(groupFor('Groceries'));
+    click(groupFor('Groceries'));
+
+    expect(groupFor('Groceries').classList.contains('hide')).toBe(false);
+    expect(rowFor('Groceries').classList.contains('off')).toBe(false);
+  });
+
+  it('clicking a legend row also toggles hide', () => {
+    click(rowFor('Transport'));
+    expect(groupFor('Transport').classList.contains('hide')).toBe(true);
+    expect(rowFor('Transport').classList.contains('off')).toBe(true);
+  });
+
+  it('multiple series can be hidden independently', () => {
+    click(groupFor('Groceries'));
+    click(rowFor('Transport'));
+
+    expect(groupFor('Groceries').classList.contains('hide')).toBe(true);
+    expect(groupFor('Transport').classList.contains('hide')).toBe(true);
+  });
+
+  it('hovering a hidden row does not spotlight it', () => {
+    click(rowFor('Groceries'));
+    hover(rowFor('Groceries'));
+
+    expect(groupFor('Groceries').classList.contains('hot')).toBe(false);
+    expect(rowFor('Groceries').classList.contains('hot')).toBe(false);
+    // Visible series is not dimmed by a hover on a hidden row.
+    expect(groupFor('Transport').classList.contains('dim')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // destroy()
 // ---------------------------------------------------------------------------
 
 describe('destroy()', () => {
-  it('destroys a live chart instance', async () => {
+  it('clears the rendered chart and legend', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_TRENDS);
     controller = createTrends({ root: document, fetchFn });
     await controller.load();
-    const instance = Chart.mock.results[0].value;
-
     controller.destroy();
-    expect(instance.destroy).toHaveBeenCalledOnce();
+
+    expect(groups().length).toBe(0);
+    expect(rows().length).toBe(0);
     controller = null;
   });
 
@@ -355,7 +446,7 @@ describe('destroy()', () => {
     await controller.load();
     controller.destroy();
 
-    const select = document.getElementById('trends-window');
+    const select = $('trends-window');
     select.dispatchEvent(new Event('change'));
     await new Promise((r) => setTimeout(r, 0));
 

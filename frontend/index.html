@@ -373,11 +373,19 @@
               <select id="trends-window" class="period-select"></select>
             </div>
             <p id="trends-message" class="message-banner" hidden></p>
-            <div class="period-grid">
-              <section class="card trends-chart-card">
-                <canvas id="trends-canvas" width="720" height="360"></canvas>
-              </section>
-            </div>
+            <section class="card trends-card">
+              <div class="trends-layout">
+                <div class="trends-chart-col">
+                  <svg id="trends-chart" class="trends-svg" viewBox="0 0 900 400"
+                       role="img" aria-label="Category spend trends"></svg>
+                </div>
+                <div class="trends-legend-col">
+                  <div class="trends-legend-head">Categories</div>
+                  <div class="trends-legend-list" id="trends-legend"></div>
+                  <div class="trends-legend-foot">Latest month shown. Hover to spotlight; click a category to hide it, click again to restore.</div>
+                </div>
+              </div>
+            </section>
           </section>
         </div>
       </div>

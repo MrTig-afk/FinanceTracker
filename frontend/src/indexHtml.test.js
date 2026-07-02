@@ -122,10 +122,20 @@ describe('index.html — Trends view section', () => {
     expect(html).toMatch(/<section class="view" data-view="trends" hidden>/);
   });
 
-  it('contains the trends window select, message banner, and canvas', () => {
+  it('contains the trends window select, message banner, inline-SVG chart, and legend', () => {
     expect(html).toContain('id="trends-window"');
     expect(html).toContain('id="trends-message"');
-    expect(html).toContain('id="trends-canvas"');
+    expect(html).toContain('id="trends-chart"');
+    expect(html).toContain('id="trends-legend"');
+  });
+
+  it('renders the chart as an inline <svg> (no <canvas>) with the design viewBox', () => {
+    const trendsMatch = html.match(/<section class="view" data-view="trends" hidden>[\s\S]*?<\/section>\s*<\/div>/);
+    expect(trendsMatch).not.toBeNull();
+    const trends = trendsMatch[0];
+    expect(trends).toContain('viewBox="0 0 900 400"');
+    expect(trends).not.toContain('id="trends-canvas"');
+    expect(trends).not.toContain('<canvas');
   });
 
   it('the Trends nav link uses the exact label "Trends"', () => {
