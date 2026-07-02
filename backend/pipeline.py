@@ -45,6 +45,7 @@ from backend.idempotency import (
 from backend.sanitiser import sanitise
 from backend.analyser import categorise, build_context_prompt
 from backend.store import Store
+from backend.store.splitwise_rule import match_splitwise_tag
 from backend.excel_builder import build_workbook
 from backend.drive_uploader import upload_file
 from backend.notifier import send_processed_notification
@@ -251,6 +252,30 @@ def run_pipeline(
     # .description and .amount — all sanitise() needs.
     to_categorise = store.uncategorised()
 
+    # Deterministic Splitwise self-tag pass — BEFORE sanitise(), on the RAW local
+    # description. The owner writes their own tag (e.g. "Splitwise utilities") into
+    # PayID/Osko references; the sanitiser would eat those words or fail-closed-drop
+    # the whole P2P row, so the LLM can never see the tag. We categorise these rows
+    # here and EXCLUDE them from the LLM payload (privacy: the reference may carry a
+    # friend's name, and it never leaves the machine).
+    splitwise_mapping: dict[int, str] = {}
+    remaining: list = []
+    for row in to_categorise:
+        label = match_splitwise_tag(row.description)
+        if label is not None:
+            splitwise_mapping[row.id] = label
+        else:
+            remaining.append(row)
+
+    tagged_rows = [r for r in to_categorise if r.id in splitwise_mapping]
+    splitwise_count = (
+        store.set_categories(splitwise_mapping) if splitwise_mapping else 0
+    )
+
+    # Rebind so the list handed to sanitise() and re-indexed in the mapping below is
+    # the SAME shrunken list — preserves the row_index = enumerate-position invariant.
+    to_categorise = remaining
+
     # Sanitise before any off-machine call — fail-closed (FR-16..FR-21).
     sresult = sanitise(to_categorise, audit=True, log_dir=sanitise_log_dir)
 
@@ -271,7 +296,7 @@ def run_pipeline(
         for ri, cat in analysis.categories.items()
         if ri < len(to_categorise)  # defensive: ignore out-of-range indexes
     }
-    categorised = store.set_categories(mapping)
+    categorised = store.set_categories(mapping) + splitwise_count
     model_used = analysis.model_used
 
     logger.info(
@@ -295,6 +320,7 @@ def run_pipeline(
     months = sorted(
         {t.date.isoformat()[:7] for t in result.new_transactions}
         | {row.date[:7] for row in to_categorise}
+        | {row.date[:7] for row in tagged_rows}
     )
 
     for ym in months:

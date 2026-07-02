@@ -1100,6 +1100,77 @@ class TestOrphanedNullCategoryRecovery:
 
 
 # ---------------------------------------------------------------------------
+# TestSplitwiseTagging — deterministic self-tag categorisation, pre-sanitise
+# ---------------------------------------------------------------------------
+
+class TestSplitwiseTagging:
+    """A 'Splitwise <word>' tag in the raw description is categorised deterministically
+    and NEVER sent to the LLM (the reference may carry a friend's name)."""
+
+    # CommBank: no header, DD/MM/YYYY, signed amount, description, balance.
+    # Row 1 is a self-tagged Splitwise transfer with a trailing friend name; row 2 is
+    # an ordinary merchant that must still go through the LLM.
+    _MIXED = (
+        "20/06/2026,-40.00,SPLITWISE UTILITIES ALICE,1000.00\n"
+        "21/06/2026,-25.00,SYNTH CORNER STORE,975.00\n"
+    )
+    _TAGGED_ONLY = "20/06/2026,-40.00,SPLITWISE FOOD BOB,1000.00\n"
+
+    def _run(self, csv_text, store, fake, tmp_path):
+        return run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, csv_text.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+    def test_tagged_row_categorised_deterministically(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        report = self._run(self._MIXED, store, fake, tmp_path)
+        rows = {
+            r["description"]: r["category"]
+            for r in store.conn.execute("SELECT description, category FROM transactions")
+        }
+        store.close()
+
+        # Tagged row -> Utilities (NOT the fake's 'Groceries' default).
+        tagged = next(d for d in rows if "SPLITWISE UTILITIES" in d)
+        assert rows[tagged] == "Utilities"
+        # Ordinary row still LLM-categorised, so the pipeline did not stop.
+        assert rows["SYNTH CORNER STORE"] == "Groceries"
+        # Both rows counted as categorised (1 deterministic + 1 LLM).
+        assert report.categorised == 2
+
+    def test_tagged_row_never_reaches_the_llm_payload(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        self._run(self._MIXED, store, fake, tmp_path)
+        store.close()
+
+        blob = " ".join(fake.received_user_prompts)
+        # Privacy invariant: neither the tag nor the friend name leaves the machine.
+        assert "SPLITWISE" not in blob
+        assert "ALICE" not in blob
+        # Exactly the one non-tagged row was sent to the analyser.
+        total_items = sum(len(json.loads(p)) for p in fake.received_user_prompts)
+        assert total_items == 1
+
+    def test_tagged_only_upload_makes_zero_llm_calls(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        report = self._run(self._TAGGED_ONLY, store, fake, tmp_path)
+        cat = store.conn.execute("SELECT category FROM transactions").fetchone()[0]
+        store.close()
+
+        assert fake.call_count == 0          # payload empty -> no off-machine call
+        assert cat == "Dining Out"           # SPLITWISE FOOD -> Dining Out
+        assert report.categorised == 1
+
+
+# ---------------------------------------------------------------------------
 # TestPushNotificationInvocation — v2 Pass 3 (inert scaffold)
 #
 # Asserts pipeline.py only calls send_processed_notification behind the flag
