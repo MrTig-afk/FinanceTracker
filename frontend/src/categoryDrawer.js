@@ -11,7 +11,7 @@
  * by the `.is-open` class (CSS handles the slide + fade, both directions).
  */
 
-import { fetchCategoryTransactions, postCategoryOverride } from './api.js';
+import { fetchCategoryTransactions, postCategoryOverride, getSettings } from './api.js';
 import { formatCurrency } from './summary.js';
 
 /**
@@ -35,6 +35,7 @@ const TAXONOMY_LABELS = [
  *   root?: Document,
  *   fetchFn?: (category: string, month?: string) => Promise<object>,
  *   overrideFn?: (id: number, category: string) => Promise<object>,
+ *   settingsFn?: () => Promise<object>,
  *   onChanged?: (summary: object) => void,
  * }} options
  * @returns {{ open(category: string, opts?: {month?: string, color?: string}): Promise<void>,
@@ -44,6 +45,7 @@ export function createCategoryDrawer({
   root = document,
   fetchFn = fetchCategoryTransactions,
   overrideFn = postCategoryOverride,
+  settingsFn = getSettings,
   onChanged = null,
 } = {}) {
   const doc = root.documentElement ? root : root.ownerDocument ?? document;
@@ -102,6 +104,10 @@ export function createCategoryDrawer({
   let currentMonth;
   let currentColor;
 
+  // Whether the owner has opted in to category corrections (Settings toggle,
+  // `corrections_enabled`). Re-read on every load; fails closed to hidden.
+  let correctionsEnabled = false;
+
   // --- Rendering ------------------------------------------------------------
   function _renderRow(t) {
     const row = doc.createElement('div');
@@ -129,12 +135,22 @@ export function createCategoryDrawer({
     main.appendChild(desc);
     main.appendChild(amount);
 
+    const inTaxonomy = TAXONOMY_LABELS.includes(currentCategory);
+
+    // The recategorise picker only appears when the owner has opted in to
+    // corrections in Settings. The one exception is the 'Uncategorised' view:
+    // assigning a category to a row the categoriser failed on is remediation,
+    // not feedback, so that picker is always available.
+    if (inTaxonomy && !correctionsEnabled) {
+      row.appendChild(main);
+      return row;
+    }
+
     // --- Category picker (manual correction) --------------------------------
     const picker = doc.createElement('select');
     picker.className = 'cat-drawer-picker';
     picker.setAttribute('aria-label', 'Change category for this transaction');
 
-    const inTaxonomy = TAXONOMY_LABELS.includes(currentCategory);
     if (!inTaxonomy) {
       // e.g. the 'Uncategorised' view: no canonical option is pre-selected.
       const placeholder = doc.createElement('option');
@@ -205,10 +221,19 @@ export function createCategoryDrawer({
   // Fetch + render one category/month view. Shared by open() and the post-
   // override refresh so both paths stay in sync.
   function _load(category, month) {
+    // Settings are re-read alongside the transactions so a toggle flipped in
+    // Settings takes effect on the next open, and a failed read hides the
+    // picker (fail closed) rather than offering a disabled feature.
+    const settings = Promise.resolve()
+      .then(() => settingsFn())
+      .then((s) => Boolean(s && s.corrections_enabled))
+      .catch(() => false);
+
     return Promise.resolve()
-      .then(() => fetchFn(category, month))
-      .then((data) => {
+      .then(() => Promise.all([fetchFn(category, month), settings]))
+      .then(([data, corrections]) => {
         if (!isOpen) return; // user closed it while the request was in flight
+        correctionsEnabled = corrections;
         const count =
           data.count ?? (data.transactions ? data.transactions.length : 0);
         const noun = count === 1 ? 'transaction' : 'transactions';

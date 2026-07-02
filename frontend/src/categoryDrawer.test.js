@@ -17,6 +17,11 @@ const CANNED = {
   ],
 };
 
+// The recategorise picker is gated on the Settings corrections toggle; tests
+// inject the settings read so no real network is touched.
+const settingsOn = () => vi.fn().mockResolvedValue({ corrections_enabled: true });
+const settingsOff = () => vi.fn().mockResolvedValue({ corrections_enabled: false });
+
 let drawer;
 
 afterEach(() => {
@@ -42,7 +47,7 @@ describe('createCategoryDrawer', () => {
 
   it('open() shows the drawer and renders fetched transactions', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
-    drawer = createCategoryDrawer({ root: document, fetchFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, settingsFn: settingsOff() });
 
     await drawer.open('Subscriptions', { month: '2026-06', color: '#6f6bd8' });
 
@@ -56,7 +61,7 @@ describe('createCategoryDrawer', () => {
 
   it('renders an empty state when the category has no transactions', async () => {
     const fetchFn = vi.fn().mockResolvedValue({ ...CANNED, count: 0, transactions: [] });
-    drawer = createCategoryDrawer({ root: document, fetchFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, settingsFn: settingsOff() });
 
     await drawer.open('Rent', { month: '2026-06' });
 
@@ -66,7 +71,7 @@ describe('createCategoryDrawer', () => {
 
   it('close() hides the drawer', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
-    drawer = createCategoryDrawer({ root: document, fetchFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, settingsFn: settingsOff() });
     await drawer.open('Subscriptions', {});
 
     drawer.close();
@@ -78,7 +83,7 @@ describe('createCategoryDrawer', () => {
 
   it('closes on the Escape key', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
-    drawer = createCategoryDrawer({ root: document, fetchFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, settingsFn: settingsOff() });
     await drawer.open('Subscriptions', {});
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
@@ -88,7 +93,7 @@ describe('createCategoryDrawer', () => {
 
   it('closes when the backdrop is clicked', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
-    drawer = createCategoryDrawer({ root: document, fetchFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, settingsFn: settingsOff() });
     await drawer.open('Subscriptions', {});
 
     backdrop().dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -98,7 +103,7 @@ describe('createCategoryDrawer', () => {
 
   it('closes when the close button is clicked', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
-    drawer = createCategoryDrawer({ root: document, fetchFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, settingsFn: settingsOff() });
     await drawer.open('Subscriptions', {});
 
     document
@@ -110,7 +115,7 @@ describe('createCategoryDrawer', () => {
 
   it('shows an error message when the fetch fails', async () => {
     const fetchFn = vi.fn().mockRejectedValue(new Error('boom'));
-    drawer = createCategoryDrawer({ root: document, fetchFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, settingsFn: settingsOff() });
 
     await drawer.open('Subscriptions', {});
 
@@ -127,7 +132,9 @@ const picker = () => document.querySelector('.cat-drawer-picker');
 describe('createCategoryDrawer — category picker', () => {
   it('renders a picker per row with the current category pre-selected', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
-    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn: vi.fn() });
+    drawer = createCategoryDrawer({
+      root: document, fetchFn, overrideFn: vi.fn(), settingsFn: settingsOn(),
+    });
 
     await drawer.open('Subscriptions', { month: '2026-06' });
 
@@ -150,7 +157,9 @@ describe('createCategoryDrawer — category picker', () => {
         { id: 9, date: '2026-06-01', description: 'SYNTH MYSTERY', amount: '-5.00', bank: 'westpac' },
       ],
     });
-    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn: vi.fn() });
+    drawer = createCategoryDrawer({
+      root: document, fetchFn, overrideFn: vi.fn(), settingsFn: settingsOn(),
+    });
 
     await drawer.open('Uncategorised', { month: '2026-06' });
 
@@ -161,7 +170,7 @@ describe('createCategoryDrawer — category picker', () => {
   it('changing the picker calls overrideFn with (id, newCategory)', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
     const overrideFn = vi.fn().mockResolvedValue({ totals: {}, net: '0.00', count: 0 });
-    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn });
+    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn, settingsFn: settingsOn() });
 
     await drawer.open('Subscriptions', { month: '2026-06' });
 
@@ -178,7 +187,9 @@ describe('createCategoryDrawer — category picker', () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
     const overrideFn = vi.fn().mockResolvedValue(UPDATED);
     const onChanged = vi.fn();
-    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn, onChanged });
+    drawer = createCategoryDrawer({
+      root: document, fetchFn, overrideFn, onChanged, settingsFn: settingsOn(),
+    });
 
     await drawer.open('Subscriptions', { month: '2026-06' });
     expect(fetchFn).toHaveBeenCalledTimes(1);
@@ -199,7 +210,9 @@ describe('createCategoryDrawer — category picker', () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED);
     const overrideFn = vi.fn().mockRejectedValue(new Error('boom'));
     const onChanged = vi.fn();
-    drawer = createCategoryDrawer({ root: document, fetchFn, overrideFn, onChanged });
+    drawer = createCategoryDrawer({
+      root: document, fetchFn, overrideFn, onChanged, settingsFn: settingsOn(),
+    });
 
     await drawer.open('Subscriptions', { month: '2026-06' });
 
@@ -215,5 +228,58 @@ describe('createCategoryDrawer — category picker', () => {
     expect(onChanged).not.toHaveBeenCalled();
     // The list was not re-fetched (override failed before the refresh).
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Picker gating — corrections_enabled Settings toggle (SYNTHETIC data only)
+// ---------------------------------------------------------------------------
+
+describe('createCategoryDrawer — picker gating on corrections_enabled', () => {
+  it('hides the picker when corrections are disabled in Settings', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED);
+    drawer = createCategoryDrawer({
+      root: document, fetchFn, overrideFn: vi.fn(), settingsFn: settingsOff(),
+    });
+
+    await drawer.open('Subscriptions', { month: '2026-06' });
+
+    // The row still renders in full; only the recategorise control is absent.
+    expect(document.querySelectorAll('.cat-drawer-row').length).toBe(1);
+    expect(document.querySelector('.cat-drawer-desc').textContent).toBe('SYNTH SUB');
+    expect(picker()).toBeNull();
+  });
+
+  it('keeps the picker for the Uncategorised view even when corrections are disabled', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ...CANNED,
+      category: 'Uncategorised',
+      transactions: [
+        { id: 9, date: '2026-06-01', description: 'SYNTH MYSTERY', amount: '-5.00', bank: 'westpac' },
+      ],
+    });
+    drawer = createCategoryDrawer({
+      root: document, fetchFn, overrideFn: vi.fn(), settingsFn: settingsOff(),
+    });
+
+    await drawer.open('Uncategorised', { month: '2026-06' });
+
+    // Assigning a category to an uncategorised row is remediation, not
+    // feedback, so the picker stays available regardless of the toggle.
+    expect(picker()).not.toBeNull();
+    expect(picker().value).toBe('');
+  });
+
+  it('hides the picker when the settings read fails (fail closed)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED);
+    const settingsFn = vi.fn().mockRejectedValue(new Error('boom'));
+    drawer = createCategoryDrawer({
+      root: document, fetchFn, overrideFn: vi.fn(), settingsFn,
+    });
+
+    await drawer.open('Subscriptions', { month: '2026-06' });
+
+    expect(document.querySelectorAll('.cat-drawer-row').length).toBe(1);
+    expect(picker()).toBeNull();
   });
 });
