@@ -1,9 +1,10 @@
 /**
  * upload.js — pure upload logic.
- * PRIVACY: CSV files (Blobs) are forwarded only to the owner's own backend at
- * ${API_BASE}/upload. No file CONTENTS are read, parsed, or inspected here —
- * only the Blob/File handle is held and forwarded. No secrets in this file.
- * VITE_API_BASE is a non-secret URL (localhost / Tailscale).
+ * PRIVACY: files (Blobs) are forwarded only to the owner's own backend at
+ * ${API_BASE}/upload. CSV bytes ARE parsed here (parseCsvPreview) purely to
+ * render the on-screen preview in the owner's own client — that parsed content
+ * is never sent anywhere; only the Blob/File handle is forwarded on upload.
+ * No secrets in this file. VITE_API_BASE is a non-secret URL (localhost / Tailscale).
  */
 
 import { API_BASE, ApiError } from './api.js';

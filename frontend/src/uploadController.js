@@ -1,9 +1,10 @@
 /**
  * uploadController.js — DOM wiring for the upload section.
- * PRIVACY: Only Blob/File handles are held in component state. No file
- * contents are read, parsed, inspected, or logged here. Files are forwarded
- * only to the owner's own backend at ${API_BASE}/upload via postFn.
- * User-facing status messages NEVER include CSV contents, amounts, or names.
+ * PRIVACY: CSV bytes are read/parsed LOCALLY only to render the on-screen
+ * preview in the owner's own client (never sent, never logged). Files
+ * themselves are forwarded only to the owner's own backend at ${API_BASE}/upload
+ * via postFn. User-facing status messages NEVER include file contents, amounts,
+ * or names.
  */
 
 import {
