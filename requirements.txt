@@ -19,6 +19,10 @@ openpyxl==3.1.5
 google-api-python-client==2.156.0
 google-auth==2.37.0
 
+# Web Push notifications (VAPID). Only used when PUSH_ENABLED=true with real keys;
+# lazy-imported on the enabled send path so an inert install never loads it.
+pywebpush==2.3.0
+
 # Tests
 pytest==8.3.4
 httpx==0.28.1            # required by FastAPI TestClient
