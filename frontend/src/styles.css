@@ -16,6 +16,10 @@
   --sidebar: oklch(0.972 0.006 95);
   --inputbg: oklch(0.978 0.006 95);
   --accent: #3d9a6f;
+  /* Semantic movement deltas (spend up = red-ish, spend down = green-ish).
+     Theme-independent — theme.js does not override these. */
+  --up: #ef7a72;
+  --down: #67c98a;
 }
 
 /* ── Reset ───────────────────────────────────────────────── */
@@ -115,6 +119,7 @@ button {
 .donut-overlay-total,
 .legend-amount,
 .legend-pct,
+.stat-num,
 .net-value {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
@@ -474,7 +479,9 @@ a.nav-item {
   pointer-events: none;
 }
 
-#donut-canvas {
+#donut-canvas,
+#monthly-canvas,
+#yearly-canvas {
   position: relative;
   width: 200px;
   height: 200px;
@@ -1530,58 +1537,202 @@ a.nav-item {
   outline-offset: 2px;
 }
 
-.period-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 22px;
-  align-items: start;
-}
-
-.period-donut-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-}
-
-.totals-table,
-.compare-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
-
-.totals-table td,
-.compare-table td {
-  padding: 8px 4px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-}
-
-.totals-table td:last-child,
-.compare-table td:not(:first-child) {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.compare-title {
-  margin: 0 0 12px;
+/* Shared card heading treatment for the period cards. */
+.card-title {
+  margin: 0 0 4px;
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
 }
 
+.card-title .accent,
+.accent {
+  color: var(--accent);
+}
+
+.card-sub {
+  margin: 0 0 18px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* Hero: donut left, KPI row + horizontal wrap legend right. */
+.period-hero {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 30px;
+  align-items: center;
+}
+
+.period-hero .donut-wrapper {
+  justify-self: center;
+}
+
+.period-hero-right {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.period-kpis {
+  display: flex;
+  gap: 30px;
+  flex-wrap: wrap;
+}
+
+.kpi-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.stat-num {
+  font-size: 20px;
+  font-weight: 700;
+  margin-top: 2px;
+  color: var(--text);
+}
+
+.stat-num.net-positive {
+  color: var(--down);
+}
+
+.stat-num.net-negative {
+  color: var(--up);
+}
+
+/* Horizontal wrap legend (design: repeat(auto-fill, minmax(200px,1fr))).
+   Reuses the shared .legend-row / .legend-dot / .legend-bar rules. */
+.legend--wrap {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px 20px;
+}
+
+@media (max-width: 780px) {
+  .period-hero {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+
+  .period-hero-right {
+    width: 100%;
+  }
+}
+
+.totals-table,
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.totals-table th,
+.compare-table th {
+  text-align: right;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0 6px 11px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.totals-table th:first-child,
+.compare-table th:first-child {
+  text-align: left;
+}
+
+.totals-table td,
+.compare-table td {
+  padding: 11px 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.totals-table tbody tr:last-child td,
+.compare-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.totals-table td:not(:first-child),
+.compare-table td:not(:first-child) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Category name + colour swatch in the first table column. */
+.cat-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 500;
+}
+
+.cat-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+
 .delta-up {
-  color: #c62828;
+  color: var(--up);
 }
 
 .delta-down {
-  color: #2e7d32;
+  color: var(--down);
 }
 
 .delta-new {
   color: var(--muted);
+}
+
+/* Change % rendered as a tinted pill (tint derived from the direction colour
+   via currentColor, so it always matches the cell's up/down/neutral hue). */
+.delta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.8rem;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.delta-pill .arrow {
+  font-size: 0.7rem;
+}
+
+/* Totals footer row: 2px top border, bold figures. */
+.compare-table tfoot td {
+  padding: 12px 6px;
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+}
+
+/* Respect reduced motion for the period hero entrance animations. */
+@media (prefers-reduced-motion: reduce) {
+  .period-hero .legend-row {
+    animation: none;
+    opacity: 1;
+  }
+
+  .period-hero .legend-bar-fill {
+    transition: none;
+  }
+
+  .period-hero .donut-glow {
+    animation: none;
+  }
 }
 
 /* ── Trends view — inline-SVG line chart + right-side legend ─ */

@@ -40,9 +40,21 @@ const YEARLY_HTML = `
   <p id="yearly-message" hidden></p>
   <canvas id="yearly-canvas" width="200" height="200"></canvas>
   <span id="yearly-spent"></span>
+  <div id="yearly-kpi-spent"></div>
+  <div id="yearly-income"></div>
   <div id="yearly-net"></div>
-  <table><tbody id="yearly-totals"></tbody></table>
-  <table><tbody id="yearly-compare"></tbody></table>
+  <div id="yearly-legend" class="legend legend--wrap"></div>
+  <table>
+    <thead><tr><th>Category</th><th>Amount</th></tr></thead>
+    <tbody id="yearly-totals"></tbody>
+  </table>
+  <table>
+    <thead><tr>
+      <th>Category</th><th>This year</th><th>Last year</th><th>Change</th><th>Change %</th>
+    </tr></thead>
+    <tbody id="yearly-compare"></tbody>
+    <tfoot><tr id="yearly-compare-foot"></tr></tfoot>
+  </table>
   <span id="yearly-compare-label"></span>
 `;
 
@@ -207,9 +219,11 @@ describe('comparison row classes + pct text', () => {
     const rows = [...document.querySelectorAll('#yearly-compare tr')];
     const groceriesRow = rows.find((r) => r.textContent.includes('Groceries'));
     const cells = groceriesRow.querySelectorAll('td');
-    expect(cells[2].classList.contains('delta-up')).toBe(true);
+    // category, this year, last year, change, change % — change + % carry the class
+    expect(cells.length).toBe(5);
     expect(cells[3].classList.contains('delta-up')).toBe(true);
-    expect(cells[3].textContent).toBe('25%');
+    expect(cells[4].classList.contains('delta-up')).toBe(true);
+    expect(cells[4].textContent).toContain('25%');
   });
 
   it('applies delta-down when pct_change < 0', async () => {
@@ -219,19 +233,31 @@ describe('comparison row classes + pct text', () => {
 
     const row = document.querySelector('#yearly-compare tr');
     const cells = row.querySelectorAll('td');
-    expect(cells[2].classList.contains('delta-down')).toBe(true);
-    expect(cells[3].textContent).toBe('-75%');
+    expect(cells[3].classList.contains('delta-down')).toBe(true);
+    expect(cells[4].textContent).toContain('-75%');
   });
 
-  it('applies delta-new and renders the em-dash placeholder when pct_change is null', async () => {
+  it('applies delta-new and renders the n/a placeholder when pct_change is null', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_YEAR_NO_PREV);
     controller = createYearly({ root: document, fetchFn });
     await controller.load();
 
     const row = document.querySelector('#yearly-compare tr');
     const cells = row.querySelectorAll('td');
-    expect(cells[2].classList.contains('delta-new')).toBe(true);
-    expect(cells[3].textContent).toBe('n/a');
+    expect(cells[3].classList.contains('delta-new')).toBe(true);
+    expect(cells[4].textContent).toBe('n/a');
+  });
+
+  it('renders the last-year (previous) column in each comparison row', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_YEAR);
+    controller = createYearly({ root: document, fetchFn });
+    await controller.load();
+
+    const rows = [...document.querySelectorAll('#yearly-compare tr')];
+    const groceriesRow = rows.find((r) => r.textContent.includes('Groceries'));
+    const cells = groceriesRow.querySelectorAll('td');
+    // cells[2] is "Last year" — Groceries previous was -1200.00
+    expect(cells[2].textContent).toContain('1,200');
   });
 
   it('shows "no prior year" in the compare label when prev_y is null', async () => {
@@ -343,6 +369,76 @@ describe('<select> change', () => {
 
     expect(fetchFn).toHaveBeenLastCalledWith('2025');
     expect(document.querySelectorAll('#yearly-totals tr').length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hero: legend + KPI row
+// ---------------------------------------------------------------------------
+
+describe('hero legend + KPI row', () => {
+  it('renders one legend row per spend category (Income excluded from the donut)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_YEAR);
+    controller = createYearly({ root: document, fetchFn });
+    await controller.load();
+    // Groceries + Rent are expenses; Income is excluded from the spend donut.
+    const rows = document.querySelectorAll('#yearly-legend .legend-row');
+    expect(rows.length).toBe(2);
+  });
+
+  it('each legend row has a dot, name, amount, pct and a share bar', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_YEAR);
+    controller = createYearly({ root: document, fetchFn });
+    await controller.load();
+    const row = document.querySelector('#yearly-legend .legend-row');
+    expect(row.querySelector('.legend-dot')).not.toBeNull();
+    expect(row.querySelector('.legend-name')).not.toBeNull();
+    expect(row.querySelector('.legend-amount')).not.toBeNull();
+    expect(row.querySelector('.legend-pct')).not.toBeNull();
+    expect(row.querySelector('.legend-bar-fill')).not.toBeNull();
+  });
+
+  it('sets the Spent, Income and Net KPI values (Income = Net + Spent)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_YEAR);
+    controller = createYearly({ root: document, fetchFn });
+    await controller.load();
+    // Spent = 1500 + 10800 = 12300, Net = 26100, Income = 38400.
+    expect(document.getElementById('yearly-kpi-spent').textContent).toContain('12,300');
+    expect(document.getElementById('yearly-income').textContent).toContain('38,400');
+    const netEl = document.getElementById('yearly-net');
+    expect(netEl.classList.contains('net-positive')).toBe(true);
+    expect(netEl.textContent).toContain('26,100');
+  });
+
+  it('clears the legend and KPI values on the empty state', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(EMPTY_YEAR);
+    controller = createYearly({ root: document, fetchFn });
+    await controller.load();
+    expect(document.querySelectorAll('#yearly-legend .legend-row').length).toBe(0);
+    expect(document.getElementById('yearly-income').textContent).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Comparison totals footer
+// ---------------------------------------------------------------------------
+
+describe('comparison totals footer', () => {
+  it('renders a Total footer row with five cells', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_YEAR);
+    controller = createYearly({ root: document, fetchFn });
+    await controller.load();
+    const foot = document.getElementById('yearly-compare-foot');
+    const cells = foot.querySelectorAll('td');
+    expect(cells.length).toBe(5);
+    expect(cells[0].textContent).toBe('Total');
+  });
+
+  it('clears the footer on the empty state', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(EMPTY_YEAR);
+    controller = createYearly({ root: document, fetchFn });
+    await controller.load();
+    expect(document.getElementById('yearly-compare-foot').querySelectorAll('td').length).toBe(0);
   });
 });
 

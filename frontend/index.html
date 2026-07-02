@@ -317,25 +317,73 @@
               <select id="monthly-select" class="period-select"></select>
             </div>
             <p id="monthly-message" class="message-banner" hidden></p>
-            <div class="period-grid">
-              <section class="card period-donut-card">
+
+            <!-- Hero: donut + KPI row + horizontal wrap legend -->
+            <section class="card period-hero-card">
+              <h2 class="card-title">Spending breakdown</h2>
+              <p class="card-sub">Category share of this month&rsquo;s spend</p>
+              <div class="period-hero">
                 <div class="donut-wrapper">
+                  <div class="donut-glow" aria-hidden="true"></div>
                   <canvas id="monthly-canvas" width="200" height="200"></canvas>
                   <div class="donut-overlay">
                     <span class="donut-overlay-label">SPENT</span>
                     <span id="monthly-spent" class="donut-overlay-total"></span>
                   </div>
                 </div>
-                <div id="monthly-net" class="net-value"></div>
-              </section>
-              <section class="card period-totals-card">
-                <table class="totals-table"><tbody id="monthly-totals"></tbody></table>
-              </section>
-              <section class="card period-compare-card">
-                <h2 class="compare-title">Change vs <span id="monthly-compare-label"></span></h2>
-                <table class="compare-table"><tbody id="monthly-compare"></tbody></table>
-              </section>
-            </div>
+                <div class="period-hero-right">
+                  <div class="period-kpis">
+                    <div class="period-kpi">
+                      <div class="kpi-label">Spent</div>
+                      <div id="monthly-kpi-spent" class="stat-num"></div>
+                    </div>
+                    <div class="period-kpi">
+                      <div class="kpi-label">Income</div>
+                      <div id="monthly-income" class="stat-num"></div>
+                    </div>
+                    <div class="period-kpi">
+                      <div class="kpi-label">Net</div>
+                      <div id="monthly-net" class="stat-num"></div>
+                    </div>
+                  </div>
+                  <div id="monthly-legend" class="legend legend--wrap"></div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Category totals breakdown -->
+            <section class="card period-totals-card">
+              <h2 class="card-title">Category totals</h2>
+              <p class="card-sub">Every category this month, largest first</p>
+              <table class="totals-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="monthly-totals"></tbody>
+              </table>
+            </section>
+
+            <!-- Month-over-month comparison -->
+            <section class="card period-compare-card">
+              <h2 class="card-title">Change vs <span id="monthly-compare-label" class="accent"></span></h2>
+              <p class="card-sub">How each category moved month over month</p>
+              <table class="compare-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>This month</th>
+                    <th>Last month</th>
+                    <th>Change</th>
+                    <th>Change %</th>
+                  </tr>
+                </thead>
+                <tbody id="monthly-compare"></tbody>
+                <tfoot><tr id="monthly-compare-foot"></tr></tfoot>
+              </table>
+            </section>
           </section>
 
           <!-- Yearly view -->
@@ -345,25 +393,73 @@
               <select id="yearly-select" class="period-select"></select>
             </div>
             <p id="yearly-message" class="message-banner" hidden></p>
-            <div class="period-grid">
-              <section class="card period-donut-card">
+
+            <!-- Hero: donut + KPI row + horizontal wrap legend -->
+            <section class="card period-hero-card">
+              <h2 class="card-title">Spending breakdown</h2>
+              <p class="card-sub">Category share of this year&rsquo;s spend</p>
+              <div class="period-hero">
                 <div class="donut-wrapper">
+                  <div class="donut-glow" aria-hidden="true"></div>
                   <canvas id="yearly-canvas" width="200" height="200"></canvas>
                   <div class="donut-overlay">
                     <span class="donut-overlay-label">SPENT</span>
                     <span id="yearly-spent" class="donut-overlay-total"></span>
                   </div>
                 </div>
-                <div id="yearly-net" class="net-value"></div>
-              </section>
-              <section class="card period-totals-card">
-                <table class="totals-table"><tbody id="yearly-totals"></tbody></table>
-              </section>
-              <section class="card period-compare-card">
-                <h2 class="compare-title">Change vs <span id="yearly-compare-label"></span></h2>
-                <table class="compare-table"><tbody id="yearly-compare"></tbody></table>
-              </section>
-            </div>
+                <div class="period-hero-right">
+                  <div class="period-kpis">
+                    <div class="period-kpi">
+                      <div class="kpi-label">Spent</div>
+                      <div id="yearly-kpi-spent" class="stat-num"></div>
+                    </div>
+                    <div class="period-kpi">
+                      <div class="kpi-label">Income</div>
+                      <div id="yearly-income" class="stat-num"></div>
+                    </div>
+                    <div class="period-kpi">
+                      <div class="kpi-label">Net</div>
+                      <div id="yearly-net" class="stat-num"></div>
+                    </div>
+                  </div>
+                  <div id="yearly-legend" class="legend legend--wrap"></div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Category totals breakdown -->
+            <section class="card period-totals-card">
+              <h2 class="card-title">Category totals</h2>
+              <p class="card-sub">Every category this year, largest first</p>
+              <table class="totals-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody id="yearly-totals"></tbody>
+              </table>
+            </section>
+
+            <!-- Year-over-year comparison -->
+            <section class="card period-compare-card">
+              <h2 class="card-title">Change vs <span id="yearly-compare-label" class="accent"></span></h2>
+              <p class="card-sub">How each category moved year over year</p>
+              <table class="compare-table">
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>This year</th>
+                    <th>Last year</th>
+                    <th>Change</th>
+                    <th>Change %</th>
+                  </tr>
+                </thead>
+                <tbody id="yearly-compare"></tbody>
+                <tfoot><tr id="yearly-compare-foot"></tr></tfoot>
+              </table>
+            </section>
           </section>
 
           <!-- Trends view -->

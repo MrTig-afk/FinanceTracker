@@ -40,9 +40,21 @@ const MONTHLY_HTML = `
   <p id="monthly-message" hidden></p>
   <canvas id="monthly-canvas" width="200" height="200"></canvas>
   <span id="monthly-spent"></span>
+  <div id="monthly-kpi-spent"></div>
+  <div id="monthly-income"></div>
   <div id="monthly-net"></div>
-  <table><tbody id="monthly-totals"></tbody></table>
-  <table><tbody id="monthly-compare"></tbody></table>
+  <div id="monthly-legend" class="legend legend--wrap"></div>
+  <table>
+    <thead><tr><th>Category</th><th>Amount</th></tr></thead>
+    <tbody id="monthly-totals"></tbody>
+  </table>
+  <table>
+    <thead><tr>
+      <th>Category</th><th>This month</th><th>Last month</th><th>Change</th><th>Change %</th>
+    </tr></thead>
+    <tbody id="monthly-compare"></tbody>
+    <tfoot><tr id="monthly-compare-foot"></tr></tfoot>
+  </table>
   <span id="monthly-compare-label"></span>
 `;
 
@@ -207,10 +219,11 @@ describe('comparison row classes + pct text', () => {
     const rows = [...document.querySelectorAll('#monthly-compare tr')];
     const groceriesRow = rows.find((r) => r.textContent.includes('Groceries'));
     const cells = groceriesRow.querySelectorAll('td');
-    // category, current, delta, pct — delta + pct cells carry the class
-    expect(cells[2].classList.contains('delta-up')).toBe(true);
+    // category, this month, last month, change, change % — change + % carry the class
+    expect(cells.length).toBe(5);
     expect(cells[3].classList.contains('delta-up')).toBe(true);
-    expect(cells[3].textContent).toBe('50%');
+    expect(cells[4].classList.contains('delta-up')).toBe(true);
+    expect(cells[4].textContent).toContain('50%');
   });
 
   it('applies delta-down when pct_change < 0', async () => {
@@ -220,19 +233,31 @@ describe('comparison row classes + pct text', () => {
 
     const row = document.querySelector('#monthly-compare tr');
     const cells = row.querySelectorAll('td');
-    expect(cells[2].classList.contains('delta-down')).toBe(true);
-    expect(cells[3].textContent).toBe('-75%');
+    expect(cells[3].classList.contains('delta-down')).toBe(true);
+    expect(cells[4].textContent).toContain('-75%');
   });
 
-  it('applies delta-new and renders the em-dash placeholder when pct_change is null', async () => {
+  it('applies delta-new and renders the n/a placeholder when pct_change is null', async () => {
     const fetchFn = vi.fn().mockResolvedValue(CANNED_MONTH_NO_PREV);
     controller = createMonthly({ root: document, fetchFn });
     await controller.load();
 
     const row = document.querySelector('#monthly-compare tr');
     const cells = row.querySelectorAll('td');
-    expect(cells[2].classList.contains('delta-new')).toBe(true);
-    expect(cells[3].textContent).toBe('n/a');
+    expect(cells[3].classList.contains('delta-new')).toBe(true);
+    expect(cells[4].textContent).toBe('n/a');
+  });
+
+  it('renders the last-month (previous) column in each comparison row', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_MONTH);
+    controller = createMonthly({ root: document, fetchFn });
+    await controller.load();
+
+    const rows = [...document.querySelectorAll('#monthly-compare tr')];
+    const groceriesRow = rows.find((r) => r.textContent.includes('Groceries'));
+    const cells = groceriesRow.querySelectorAll('td');
+    // cells[2] is "Last month" — Groceries previous was -100.00
+    expect(cells[2].textContent).toContain('100');
   });
 
   it('shows "no prior month" in the compare label when prev_ym is null', async () => {
@@ -344,6 +369,76 @@ describe('<select> change', () => {
 
     expect(fetchFn).toHaveBeenLastCalledWith('2026-05');
     expect(document.querySelectorAll('#monthly-totals tr').length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hero: legend + KPI row
+// ---------------------------------------------------------------------------
+
+describe('hero legend + KPI row', () => {
+  it('renders one legend row per spend category (Income excluded from the donut)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_MONTH);
+    controller = createMonthly({ root: document, fetchFn });
+    await controller.load();
+    // Groceries + Rent are expenses; Income is excluded from the spend donut.
+    const rows = document.querySelectorAll('#monthly-legend .legend-row');
+    expect(rows.length).toBe(2);
+  });
+
+  it('each legend row has a dot, name, amount, pct and a share bar', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_MONTH);
+    controller = createMonthly({ root: document, fetchFn });
+    await controller.load();
+    const row = document.querySelector('#monthly-legend .legend-row');
+    expect(row.querySelector('.legend-dot')).not.toBeNull();
+    expect(row.querySelector('.legend-name')).not.toBeNull();
+    expect(row.querySelector('.legend-amount')).not.toBeNull();
+    expect(row.querySelector('.legend-pct')).not.toBeNull();
+    expect(row.querySelector('.legend-bar-fill')).not.toBeNull();
+  });
+
+  it('sets the Spent, Income and Net KPI values (Income = Net + Spent)', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_MONTH);
+    controller = createMonthly({ root: document, fetchFn });
+    await controller.load();
+    // Spent = 150 + 900 = 1050, Net = 2150, Income = 3200.
+    expect(document.getElementById('monthly-kpi-spent').textContent).toContain('1,050');
+    expect(document.getElementById('monthly-income').textContent).toContain('3,200');
+    const netEl = document.getElementById('monthly-net');
+    expect(netEl.classList.contains('net-positive')).toBe(true);
+    expect(netEl.textContent).toContain('2,150');
+  });
+
+  it('clears the legend and KPI values on the empty state', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(EMPTY_MONTH);
+    controller = createMonthly({ root: document, fetchFn });
+    await controller.load();
+    expect(document.querySelectorAll('#monthly-legend .legend-row').length).toBe(0);
+    expect(document.getElementById('monthly-income').textContent).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Comparison totals footer
+// ---------------------------------------------------------------------------
+
+describe('comparison totals footer', () => {
+  it('renders a Total footer row with five cells', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_MONTH);
+    controller = createMonthly({ root: document, fetchFn });
+    await controller.load();
+    const foot = document.getElementById('monthly-compare-foot');
+    const cells = foot.querySelectorAll('td');
+    expect(cells.length).toBe(5);
+    expect(cells[0].textContent).toBe('Total');
+  });
+
+  it('clears the footer on the empty state', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(EMPTY_MONTH);
+    controller = createMonthly({ root: document, fetchFn });
+    await controller.load();
+    expect(document.getElementById('monthly-compare-foot').querySelectorAll('td').length).toBe(0);
   });
 });
 

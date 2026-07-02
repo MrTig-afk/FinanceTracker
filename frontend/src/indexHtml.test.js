@@ -83,6 +83,13 @@ describe('index.html — nav order (v2 Pass 2)', () => {
   });
 });
 
+// Isolate a single view section's markup for scoped assertions.
+function viewSection(view) {
+  const re = new RegExp(`<section class="view" data-view="${view}" hidden>[\\s\\S]*?\\n {10}</section>`);
+  const m = html.match(re);
+  return m ? m[0] : '';
+}
+
 describe('index.html — Monthly view section', () => {
   it('has a <section data-view="monthly" hidden> block', () => {
     expect(html).toMatch(/<section class="view" data-view="monthly" hidden>/);
@@ -95,6 +102,32 @@ describe('index.html — Monthly view section', () => {
     expect(html).toContain('id="monthly-totals"');
     expect(html).toContain('id="monthly-compare"');
     expect(html).toContain('id="monthly-compare-label"');
+  });
+
+  it('has the hero KPI + legend ids', () => {
+    const s = viewSection('monthly');
+    expect(s).toContain('id="monthly-kpi-spent"');
+    expect(s).toContain('id="monthly-income"');
+    expect(s).toContain('id="monthly-net"');
+    expect(s).toContain('id="monthly-legend"');
+    expect(s).toContain('donut-glow');
+  });
+
+  it('has real comparison column headers and a totals footer row', () => {
+    const s = viewSection('monthly');
+    expect(s).toContain('<th>Category</th>');
+    expect(s).toContain('<th>This month</th>');
+    expect(s).toContain('<th>Last month</th>');
+    expect(s).toContain('<th>Change</th>');
+    expect(s).toContain('<th>Change %</th>');
+    expect(s).toContain('id="monthly-compare-foot"');
+  });
+
+  it('gives the breakdown and comparison tables clear titles', () => {
+    const s = viewSection('monthly');
+    expect(s).toContain('Spending breakdown');
+    expect(s).toContain('Category totals');
+    expect(s).toContain('Change vs');
   });
 });
 
@@ -110,6 +143,32 @@ describe('index.html — Yearly view section', () => {
     expect(html).toContain('id="yearly-totals"');
     expect(html).toContain('id="yearly-compare"');
     expect(html).toContain('id="yearly-compare-label"');
+  });
+
+  it('has the hero KPI + legend ids', () => {
+    const s = viewSection('yearly');
+    expect(s).toContain('id="yearly-kpi-spent"');
+    expect(s).toContain('id="yearly-income"');
+    expect(s).toContain('id="yearly-net"');
+    expect(s).toContain('id="yearly-legend"');
+    expect(s).toContain('donut-glow');
+  });
+
+  it('has real comparison column headers (year variant) and a totals footer row', () => {
+    const s = viewSection('yearly');
+    expect(s).toContain('<th>Category</th>');
+    expect(s).toContain('<th>This year</th>');
+    expect(s).toContain('<th>Last year</th>');
+    expect(s).toContain('<th>Change</th>');
+    expect(s).toContain('<th>Change %</th>');
+    expect(s).toContain('id="yearly-compare-foot"');
+  });
+
+  it('gives the breakdown and comparison tables clear titles', () => {
+    const s = viewSection('yearly');
+    expect(s).toContain('Spending breakdown');
+    expect(s).toContain('Category totals');
+    expect(s).toContain('Change vs');
   });
 });
 
