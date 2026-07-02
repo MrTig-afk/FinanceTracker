@@ -53,3 +53,12 @@ linkedin/
 linkedin-posts.md
 OVERNIGHT_NOTES.md
 .design-handoff/
+
+# ── Local always-on deploy helpers (machine-specific; kept off the repo) ──
+service/run-web.ps1
+service/run-all.ps1
+
+# ── Local docs (repo ships only the root README) ──
+SETUP.md
+frontend/README.md
+service/README.md

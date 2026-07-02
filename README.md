@@ -144,7 +144,7 @@ Tests use synthetic data generated in code, never real transactions. The suite m
 
 ## Always-on service (Windows)
 
-`service/` contains a PowerShell launcher and a Task Scheduler definition so the backend auto-starts on login and restarts on crash. See `service/README.md`. On macOS or Linux you would use launchd or systemd instead.
+`service/` contains a Task Scheduler definition and a small supervisor (`service/supervisor.py`, run under `pythonw.exe` so no console window appears) that keeps the backend and the built PWA server running: it starts on login and on unlock, and relaunches either server if it stops. Install it once with `pwsh .\service\register-task.ps1` (remove with `-Unregister`). On macOS or Linux you would use launchd or systemd instead.
 
 ## Scope and roadmap
 
