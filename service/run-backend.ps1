@@ -1,7 +1,7 @@
-# run-backend.ps1 — launch the FinanceTracker FastAPI backend.
+# run-backend.ps1 — launch the FinanceTracker FastAPI backend in the foreground.
 #
-# Called by the Windows Task Scheduler task defined in financetracker.xml.
-# Also callable directly for manual testing:
+# Manual dev/testing helper only — Task Scheduler no longer calls this script;
+# the "FinanceTracker" task runs service/supervisor.py under pythonw.exe instead.
 #   pwsh .\service\run-backend.ps1
 #
 # This script contains NO secrets.  All sensitive config (API keys, Drive

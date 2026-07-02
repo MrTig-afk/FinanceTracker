@@ -1,22 +1,30 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <!--
-  Task Scheduler task definition for the FinanceTracker backend.
+  Task Scheduler task definition for the FinanceTracker supervisor.
+
+  One task keeps BOTH always-on servers alive: it runs service/supervisor.py
+  under pythonw.exe, which relaunches the FastAPI backend (8010) and the static
+  PWA server (4173) whenever either stops listening.
 
   The register-task.ps1 script replaces the __REPO_ROOT__ placeholder with the
   absolute path to the repository before registering this task.  Do NOT edit the
   placeholder manually; run the register script instead.
 
+  Windowless: pythonw.exe is a GUI-subsystem binary, so no console window ever
+  exists — unlike powershell.exe -WindowStyle Hidden, which Windows Terminal
+  (the Windows 11 default console host) can still show.
+
   Security: RunLevel=LeastPrivilege — the task runs as the logged-in user without
-  elevation, which means the backend keeps running while the laptop is locked
-  (LogonTrigger + InteractiveToken user task).  No UAC prompt, no admin rights.
+  elevation, which means the servers keep running while the laptop is locked
+  (InteractiveToken user task).  No UAC prompt, no admin rights.
 
   No secrets appear in this file.  All sensitive config is loaded from .env at
   runtime by python-dotenv inside the Python process.
 -->
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>FinanceTracker — always-on FastAPI backend (auto-start on login, auto-restart on crash)</Description>
-    <Version>1.0.0</Version>
+    <Description>FinanceTracker — windowless supervisor for the backend and PWA servers (starts on login and on unlock, self-heals crashes)</Description>
+    <Version>2.0.0</Version>
   </RegistrationInfo>
 
   <Triggers>
@@ -24,6 +32,13 @@
     <LogonTrigger>
       <Enabled>true</Enabled>
     </LogonTrigger>
+    <!-- Also fire on session unlock: if the supervisor died while the machine
+         was locked/asleep, unlocking revives it.  When it is already running,
+         MultipleInstancesPolicy=IgnoreNew makes this a no-op. -->
+    <SessionStateChangeTrigger>
+      <Enabled>true</Enabled>
+      <StateChange>SessionUnlock</StateChange>
+    </SessionStateChangeTrigger>
   </Triggers>
 
   <Principals>
@@ -53,8 +68,9 @@
 
   <Actions Context="Author">
     <Exec>
-      <Command>powershell.exe</Command>
-      <Arguments>-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "__REPO_ROOT__\service\run-backend.ps1"</Arguments>
+      <Command>__REPO_ROOT__\venv\Scripts\pythonw.exe</Command>
+      <Arguments>"__REPO_ROOT__\service\supervisor.py"</Arguments>
+      <WorkingDirectory>__REPO_ROOT__</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
