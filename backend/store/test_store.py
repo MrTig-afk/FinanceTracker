@@ -1323,8 +1323,35 @@ class TestMonthView:
         assert row["current"] == "0.00"
         assert row["previous"] == "-900.00"
         assert row["delta"] == "900.00"
-        # delta / previous * 100 = 900 / -900 * 100 = -100.0
+        # magnitude: (|current| - |previous|) / |previous| * 100
+        #          = (0 - 900) / 900 * 100 = -100.0
         assert row["pct_change"] == -100.0
+
+    def test_comparison_sign_flip_uses_magnitude(self) -> None:
+        """A category that was net-spend and becomes net-refund (positive) reports a
+        magnitude-based pct, not a signed-denominator one.
+
+        previous -100.00 (spent), current +50.00 (net refund) -> delta +150.00,
+        magnitude pct = (|50| - |100|) / |100| * 100 = -50.0. Under the old signed
+        denominator this was (50 - -100) / -100 * 100 = -150.0, so this test locks in
+        the magnitude behaviour.
+        """
+        t_prev = _txn("SYNTH FLIP MAY", amount="-100.00", d=date(2026, 5, 1))
+        t_cur = _txn("SYNTH FLIP JUN", amount="50.00", d=date(2026, 6, 1))
+        r = _result(t_prev, t_cur)
+        with Store(":memory:") as store:
+            store.add_new(r)
+            store.set_categories({
+                r.fingerprints[0]: "Groceries",
+                r.fingerprints[1]: "Groceries",
+            })
+            result = store.month_view("2026-06")
+
+        row = next(c for c in result["comparison"] if c["category"] == "Groceries")
+        assert row["current"] == "50.00"
+        assert row["previous"] == "-100.00"
+        assert row["delta"] == "150.00"
+        assert row["pct_change"] == -50.0
 
     def test_comparison_ordered_by_abs_current_desc(self) -> None:
         t1 = _txn("SYNTH SMALL", amount="-10.00", d=date(2026, 6, 1))

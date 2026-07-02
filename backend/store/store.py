@@ -951,10 +951,14 @@ class Store:
     ) -> list[dict]:
         """Build comparison rows: union of categories, delta = current - previous.
 
-        pct_change = (current - previous) / previous * 100 using the SIGNED previous
-        as denominator, rounded to 1dp as a float; None when previous == 0 (including
-        a category absent from the previous period). Ordered by abs(current) DESC,
-        tie-broken by category name ASC (mirrors summary.js#categoryRows).
+        pct_change is MAGNITUDE-based: (|current| - |previous|) / |previous| * 100,
+        rounded to 1dp as a float; None when previous == 0 (including a category
+        absent from the previous period). Using magnitudes decouples the sign of the
+        stored amount (spending is negative) from the direction of change, so a
+        growing spend always reads as a positive % and a shrinking spend as negative,
+        even across a sign flip (e.g. a net-refund period). `delta` remains the SIGNED
+        dollar change (current - previous). Ordered by abs(current) DESC, tie-broken
+        by category name ASC (mirrors summary.js#categoryRows).
         """
         entries: list[tuple[str, Decimal, Decimal, Decimal, float | None]] = []
         for cat in set(current) | set(previous):
@@ -965,7 +969,9 @@ class Store:
             if prev == 0:
                 pct = None
             else:
-                pct = round(float(delta) / float(prev) * 100, 1)
+                pct = round(
+                    (abs(float(cur)) - abs(float(prev))) / abs(float(prev)) * 100, 1
+                )
             entries.append((cat, cur, prev, delta, pct))
 
         entries.sort(key=lambda e: (-abs(e[1]), e[0]))
