@@ -989,6 +989,117 @@ class TestReuploadBackfillsNullBalance:
 
 
 # ---------------------------------------------------------------------------
+# TestOrphanedNullCategoryRecovery — a row stored by a prior run whose categorise
+# step then failed (or was rate-limited) is left with category NULL and its file
+# already fingerprinted. Because it is "seen", Layer 2 excludes it from
+# new_transactions — the pipeline must still recover it from the store and
+# categorise it, instead of orphaning it forever.
+# ---------------------------------------------------------------------------
+
+class TestOrphanedNullCategoryRecovery:
+    _CB_TEXT = "20/06/2026,-72.40,SYNTH ORPHAN SHOP,1000.00\n"
+
+    def _seed_orphan(self, store: Store) -> None:
+        """Persist a row with category NULL and mark its file processed — exactly
+        the state left behind when add_new() succeeds but the following
+        categorise() call fails. set_categories is deliberately NOT called."""
+        txn = Transaction(
+            date=_date(2026, 6, 20),
+            description="SYNTH ORPHAN SHOP",
+            amount=Decimal("-72.40"),
+            bank=Bank.COMMBANK,
+            balance=Decimal("1000.00"),
+        )
+        fp = transaction_fingerprint(txn)
+        store.add_new(
+            NewTxnResult(
+                new_transactions=(txn,),
+                fingerprints=(fp,),
+                duplicates_in_batch=0,
+            )
+        )
+        store.mark_file_processed(file_fingerprint(self._CB_TEXT.encode()))
+
+    def test_reupload_of_processed_file_recovers_orphan(self, tmp_path):
+        store = Store(":memory:")
+        self._seed_orphan(store)
+        assert len(store.uncategorised()) == 1  # precondition: one NULL-category row
+
+        fake = FakeAnalyserClient("Groceries")
+        report = run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        rows = store.conn.execute("SELECT category FROM transactions").fetchall()
+        remaining = store.uncategorised()
+        store.close()
+
+        # Pending uncategorised work → NOT a no-op, even though nothing is new.
+        assert report.noop is False
+        assert report.files_skipped == 1  # file recognised as already processed
+        assert report.new_txns == 0       # nothing genuinely new
+        # The orphan is now categorised, and none remain NULL.
+        assert rows[0]["category"] == "Groceries"
+        assert remaining == []
+        assert fake.call_count == 1
+        assert report.categorised == 1
+
+    def test_empty_reupload_also_recovers_orphan(self, tmp_path):
+        """A run with NO uploads still recovers a pending orphan (not a no-op)."""
+        store = Store(":memory:")
+        self._seed_orphan(store)
+
+        fake = FakeAnalyserClient("Dining Out")
+        report = run_pipeline(
+            [],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        cat = store.conn.execute("SELECT category FROM transactions").fetchone()["category"]
+        store.close()
+
+        assert report.noop is False
+        assert cat == "Dining Out"
+        assert fake.call_count == 1
+
+    def test_second_run_after_recovery_is_a_true_noop(self, tmp_path):
+        """Once recovered, re-uploading the same bytes is a true no-op again."""
+        store = Store(":memory:")
+        self._seed_orphan(store)
+        fake = FakeAnalyserClient("Groceries")
+
+        run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        calls_after_first = fake.call_count
+
+        second = run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, self._CB_TEXT.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert second.noop is True
+        assert fake.call_count == calls_after_first  # zero further LLM calls
+
+
+# ---------------------------------------------------------------------------
 # TestPushNotificationInvocation — v2 Pass 3 (inert scaffold)
 #
 # Asserts pipeline.py only calls send_processed_notification behind the flag

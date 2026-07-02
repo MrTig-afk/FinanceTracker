@@ -41,8 +41,6 @@ from backend.idempotency import (
     file_fingerprint,
     filter_new_transactions,
     is_noop,
-    select_uncategorised,
-    transaction_fingerprint,
 )
 from backend.sanitiser import sanitise
 from backend.analyser import categorise, build_context_prompt
@@ -203,7 +201,15 @@ def run_pipeline(
     # ------------------------------------------------------------------
     result = filter_new_transactions(all_parsed_txns, store.seen_transaction_fingerprints())
 
-    if is_noop(result) and balance_updates == 0:
+    # Rows already in the store that never received a category — e.g. a prior run
+    # persisted them (add_new below) but the analyser call then failed, or was
+    # rate-limited. They are "seen", so Layer 2 excludes them from
+    # result.new_transactions; without this recovery they stay NULL forever
+    # because a re-upload never re-enters them into categorisation. Fetched before
+    # add_new so the no-op guard can account for them.
+    pending_uncategorised = store.uncategorised()
+
+    if is_noop(result) and balance_updates == 0 and not pending_uncategorised:
         # Nothing new AND no balance changed — no sanitise, no LLM, no store write,
         # no Excel, no Drive (FR-15). A truly-identical re-run (same bytes, and
         # every parsed balance already matches what's stored) reaches here too:
@@ -238,10 +244,12 @@ def run_pipeline(
     # ------------------------------------------------------------------
     # Layer 3 — categorise only-new (FR-14)
     # ------------------------------------------------------------------
-    to_categorise: list[Transaction] = select_uncategorised(
-        list(result.new_transactions),
-        store.categorised_fingerprints(),
-    )
+    # Categorise EVERY currently-uncategorised row read straight from the store:
+    # the rows just inserted by add_new PLUS any recovered orphans from earlier
+    # failed runs. Reading from the store (not just result.new_transactions) is
+    # what closes the NULL-category orphan hole. UncategorisedRow carries .id,
+    # .description and .amount — all sanitise() needs.
+    to_categorise = store.uncategorised()
 
     # Sanitise before any off-machine call — fail-closed (FR-16..FR-21).
     sresult = sanitise(to_categorise, audit=True, log_dir=sanitise_log_dir)
@@ -255,10 +263,11 @@ def run_pipeline(
     # categorise() short-circuits with zero HTTP calls when sresult.payload is empty.
     analysis = categorise(sresult, client=analyser_client, context_preamble=preamble)
 
-    # Map row_index (position in to_categorise) back to fingerprint so set_categories
-    # can write by fingerprint key.  sanitise() assigns row_index = enumerate position.
+    # Map row_index (position in to_categorise) back to the row's primary-key id
+    # so set_categories writes by id.  sanitise() assigns row_index = enumerate
+    # position, so to_categorise[ri] is the row that produced category `cat`.
     mapping = {
-        transaction_fingerprint(to_categorise[ri]): cat
+        to_categorise[ri].id: cat
         for ri, cat in analysis.categories.items()
         if ri < len(to_categorise)  # defensive: ignore out-of-range indexes
     }
@@ -279,9 +288,14 @@ def run_pipeline(
     drive_file_id: str | None = None
     year_month: str | None = None
 
-    # Build one workbook per distinct month present in the new transactions.
+    # Build one workbook per distinct month touched this run: months present in
+    # the new transactions PLUS months of any recovered orphan rows (so a run
+    # that only fixed previously-NULL categories still refreshes their workbook).
     # Multi-month uploads (overlapping exports) produce one file per month.
-    months = sorted({t.date.isoformat()[:7] for t in result.new_transactions})
+    months = sorted(
+        {t.date.isoformat()[:7] for t in result.new_transactions}
+        | {row.date[:7] for row in to_categorise}
+    )
 
     for ym in months:
         try:
