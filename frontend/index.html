@@ -54,12 +54,12 @@
           <a href="#" class="nav-item" data-view="context">
             <span class="nav-dot"></span>Category context
           </a>
-          <span class="nav-item nav-item--inert">
-            <span class="nav-dot"></span>History
-          </span>
-          <span class="nav-item nav-item--inert">
+          <a href="#" class="nav-item" data-view="settings">
             <span class="nav-dot"></span>Settings
-          </span>
+          </a>
+          <a href="#" class="nav-item" data-view="contact">
+            <span class="nav-dot"></span>Contact
+          </a>
         </nav>
 
         <div id="sidebar-month" class="sidebar-info"></div>
@@ -481,6 +481,130 @@
                   <div class="trends-legend-foot">Latest month shown. Hover to spotlight; click a category to hide it, click again to restore.</div>
                 </div>
               </div>
+            </section>
+          </section>
+
+          <!-- Settings view (Feature E) -->
+          <section class="view" data-view="settings" hidden>
+            <div class="settings-grid">
+              <!-- Notifications -->
+              <section class="card settings-card">
+                <h2 class="card-title">Notifications</h2>
+                <p class="card-sub">Choose which events raise a notification on this device.</p>
+                <div id="settings-notifications" class="settings-toggle-list"></div>
+                <p id="settings-notifications-status" class="settings-status" role="status" aria-live="polite"></p>
+                <p class="settings-hint">
+                  Enabling notifications on this device is handled on the
+                  <a href="#" class="settings-link" data-view="upload">Upload</a> tab.
+                </p>
+              </section>
+
+              <!-- Data & backup -->
+              <section class="card settings-card">
+                <h2 class="card-title">Data &amp; backup</h2>
+                <p class="card-sub">Export a copy of everything, or wipe the database.</p>
+                <a id="settings-backup-link" class="upload-btn settings-download-btn" href="#" download>
+                  Download backup (CSV)
+                </a>
+
+                <div class="settings-danger danger">
+                  <h3 class="settings-danger-title">Danger zone</h3>
+                  <p class="settings-danger-desc">
+                    This permanently deletes all stored transactions and settings on this
+                    machine. Type <strong>RESET</strong> to confirm.
+                  </p>
+                  <div class="settings-reset-row">
+                    <label class="settings-reset-label" for="settings-reset-input">Confirm</label>
+                    <input id="settings-reset-input" type="text" class="settings-reset-input"
+                           placeholder="RESET" autocomplete="off" spellcheck="false" />
+                    <button id="settings-reset-btn" type="button" class="settings-reset-btn" disabled>
+                      Reset all data
+                    </button>
+                  </div>
+                  <p id="settings-reset-status" class="settings-status" role="status" aria-live="polite"></p>
+                </div>
+              </section>
+
+              <!-- Categoriser health -->
+              <section class="card settings-card">
+                <h2 class="card-title">Categoriser health</h2>
+                <p class="card-sub">Check the OpenRouter connection and re-sort anything left over.</p>
+                <p id="settings-categoriser-summary" class="settings-summary">Loading...</p>
+                <div class="settings-btn-row">
+                  <button id="settings-categoriser-test" type="button" class="settings-secondary-btn">
+                    Test OpenRouter
+                  </button>
+                  <p id="settings-categoriser-test-status" class="settings-status" role="status" aria-live="polite"></p>
+                </div>
+                <div class="settings-btn-row">
+                  <button id="settings-categoriser-retry" type="button" class="settings-secondary-btn">
+                    Retry uncategorised
+                  </button>
+                  <p id="settings-categoriser-retry-status" class="settings-status" role="status" aria-live="polite"></p>
+                </div>
+              </section>
+
+              <!-- Learned corrections -->
+              <section class="card settings-card">
+                <h2 class="card-title">Learned corrections</h2>
+                <p class="card-sub">Optional. The app can remember how you re-sort merchants.</p>
+                <label class="settings-toggle-row settings-corrections-optin">
+                  <span class="settings-toggle-label">
+                    Let the app learn from my category corrections (off by default)
+                  </span>
+                  <span class="fuel-switch">
+                    <input id="settings-corrections-toggle" type="checkbox"
+                           aria-label="Let the app learn from my category corrections" />
+                    <span class="fuel-switch-track"><span class="knob"></span></span>
+                  </span>
+                </label>
+                <p class="settings-note">
+                  When this is off, corrections are neither recorded nor used.
+                </p>
+                <div id="settings-corrections-list" class="settings-corrections-list"></div>
+                <p id="settings-corrections-status" class="settings-status" role="status" aria-live="polite"></p>
+              </section>
+
+              <!-- About & Privacy -->
+              <section class="card settings-card">
+                <h2 class="card-title">About &amp; privacy</h2>
+                <p class="settings-about">
+                  Your data stays on this machine. The only external call is to OpenRouter for
+                  categorisation, and it only ever receives the sanitised row index, cleaned
+                  description, and amount - never account numbers, balances, or names.
+                </p>
+                <p class="settings-about">
+                  <a class="settings-link" href="https://github.com/MrTig-afk/FinanceTracker"
+                     target="_blank" rel="noopener noreferrer">Source code on GitHub</a>
+                </p>
+                <p class="settings-version">FinanceTracker v0.1.0</p>
+              </section>
+            </div>
+          </section>
+
+          <!-- Contact view -->
+          <section class="view" data-view="contact" hidden>
+            <section class="card settings-card contact-card">
+              <h2 class="card-title">Contact</h2>
+              <p class="card-sub">Reach the maintainer:</p>
+              <ul class="contact-list">
+                <li class="contact-item">
+                  <span class="contact-label">Email</span>
+                  <!-- TODO(owner): replace with real email -->
+                  <a class="settings-link" href="mailto:your-email@example.com">your-email@example.com</a>
+                </li>
+                <li class="contact-item">
+                  <span class="contact-label">LinkedIn</span>
+                  <!-- TODO(owner): replace with real LinkedIn URL -->
+                  <a class="settings-link" href="https://www.linkedin.com/in/your-handle/"
+                     target="_blank" rel="noopener noreferrer">linkedin.com/in/your-handle</a>
+                </li>
+                <li class="contact-item">
+                  <span class="contact-label">GitHub</span>
+                  <a class="settings-link" href="https://github.com/MrTig-afk"
+                     target="_blank" rel="noopener noreferrer">github.com/MrTig-afk</a>
+                </li>
+              </ul>
             </section>
           </section>
         </div>

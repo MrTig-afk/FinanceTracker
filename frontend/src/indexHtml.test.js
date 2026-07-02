@@ -61,11 +61,13 @@ describe('index.html — no new webfont dependency introduced', () => {
 // ---------------------------------------------------------------------------
 
 describe('index.html — nav order (v2 Pass 2)', () => {
-  it('lists data-view attributes in the exact order: upload, overview, trends, monthly, yearly, context', () => {
+  it('lists data-view attributes in the exact order: upload, overview, trends, monthly, yearly, context, settings, contact', () => {
     const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/);
     expect(navMatch).not.toBeNull();
     const dataViews = [...navMatch[0].matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
-    expect(dataViews).toEqual(['upload', 'overview', 'trends', 'monthly', 'yearly', 'context']);
+    expect(dataViews).toEqual([
+      'upload', 'overview', 'trends', 'monthly', 'yearly', 'context', 'settings', 'contact',
+    ]);
   });
 
   it('keeps Overview as the only nav-item--active entry', () => {
@@ -75,11 +77,12 @@ describe('index.html — nav order (v2 Pass 2)', () => {
     expect(navMatch).toContain('nav-item nav-item--active" data-view="overview"');
   });
 
-  it('History and Settings remain inert (not converted to nav-view links)', () => {
+  it('drops the inert History item and makes Settings + Contact real nav-view links (Feature E)', () => {
     const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/)[0];
-    expect(navMatch).toContain('nav-item--inert');
-    expect(navMatch).not.toContain('data-view="history"');
-    expect(navMatch).not.toContain('data-view="settings"');
+    expect(navMatch).not.toContain('nav-item--inert');
+    expect(navMatch).not.toContain('History');
+    expect(navMatch).toContain('data-view="settings"');
+    expect(navMatch).toContain('data-view="contact"');
   });
 });
 

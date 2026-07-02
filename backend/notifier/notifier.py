@@ -296,10 +296,23 @@ def send_notification(
 ) -> int:
     """Build the ``ntype`` catalog payload and best-effort push it to all subs.
 
-    Fail-closed: a hard no-op (returns 0) unless push is enabled with real VAPID
-    keys AND at least one subscription exists. Never raises for a delivery/keying
-    problem; only an unknown ``ntype`` raises ValueError (programmer error).
+    Per-type opt-out gate (Feature E): a HARD no-op (returns 0, no payload build,
+    no delivery) when the owner has disabled this notification type
+    (store.notification_enabled(ntype) is False). The default is enabled, so an
+    owner who never touched settings still gets everything. A settings-read failure
+    must never break a run, so any error reading the flag falls back to enabled (the
+    safe default) rather than silently dropping the notification.
+
+    Fail-closed: even when the type is enabled, delivery is still a hard no-op
+    (returns 0) unless push is enabled with real VAPID keys AND at least one
+    subscription exists. Never raises for a delivery/keying problem; only an unknown
+    ``ntype`` raises ValueError (programmer error).
     """
+    try:
+        if store is not None and not store.notification_enabled(ntype):
+            return 0
+    except Exception:  # noqa: BLE001 — a settings read must never break delivery
+        pass
     payload = build_notification(ntype, count=count, detail=detail)
     return _deliver(store, payload, config)
 

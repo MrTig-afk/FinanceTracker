@@ -315,6 +315,202 @@ export async function postPushUnsubscribe(endpoint) {
 }
 
 /**
+ * Fetch the owner's app settings (notification toggles + learned-corrections opt-in).
+ * @returns {Promise<{corrections_enabled: boolean, notifications: Object<string, boolean>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function getSettings() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/settings`, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Update the owner's app settings. Sends a partial patch; returns the full settings.
+ * @param {{corrections_enabled?: boolean, notifications?: Object<string, boolean>}} partial
+ * @returns {Promise<object>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function putSettings(partial) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/settings`, {
+      method: 'PUT',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial ?? {}),
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch the learned category corrections (the owner's own local notes).
+ * @returns {Promise<{enabled: boolean, corrections: Array<{id: number, cleaned_description: string, category: string, created_at: string}>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function getCorrections() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/corrections`, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Remove one learned correction by id.
+ * @param {number} id  Correction row id.
+ * @returns {Promise<{ok: boolean, removed: number}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function deleteCorrection(id) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/corrections/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch the categoriser health snapshot (configured flag + uncategorised count).
+ * @returns {Promise<{configured: boolean, uncategorised_count: number}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function getCategoriserStatus() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/categoriser/status`, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Probe the OpenRouter categoriser (reachability / rate-limit check).
+ * @returns {Promise<{configured: boolean, reachable: boolean, rate_limited: boolean, detail: string}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function postCategoriserTest() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/categoriser/test`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Ask the backend to retry categorising any still-uncategorised transactions.
+ * @returns {Promise<{ok: boolean, categorised: number, remaining: number, detail?: string}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function postCategoriserRetry() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/categoriser/retry`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Wipe all stored data on the owner's own local backend. Requires the exact
+ * confirmation string 'RESET'; the backend rejects anything else with a 400.
+ * @param {string} confirm  Must be the literal 'RESET'.
+ * @returns {Promise<{ok: boolean, cleared: object}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function postReset(confirm) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/reset`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm }),
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Build the CSV backup download URL. No network call — just the URL an anchor
+ * links to so the browser downloads the file directly from the local backend.
+ * @returns {string}
+ */
+export function transactionsCsvUrl() {
+  return `${API_BASE}/export/transactions.csv`;
+}
+
+/**
  * Fetch backend status (best-effort — returns null on any failure).
  * Never throws; caller can safely ignore the return value.
  * @returns {Promise<object|null>}

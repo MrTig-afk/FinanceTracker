@@ -124,6 +124,165 @@ class RunReport:
     balance_updates: int      # rows whose balance was corrected in place this run (Q3)
 
 
+@dataclass(frozen=True)
+class _CategoriseOutcome:
+    """Result of one categorise-pending pass (Layer 3 + Output), shared by
+    run_pipeline and retry_uncategorised. All string fields are safe (counts,
+    model ids, local paths, Drive ids, "YYYY-MM") — never raw transaction text.
+    """
+
+    categorised: int              # rows categorised this pass (incl. Splitwise rows)
+    model_used: str               # tier that answered ("" when no LLM call / failed)
+    categorisation_failed: bool   # True when the analyser exhausted all tiers
+    excel_path: str | None        # str(Path) of the last written workbook, or None
+    drive_file_id: str | None     # Drive file id, or None (unconfigured / no rebuild)
+    year_month: str | None        # "YYYY-MM" of the last month produced, or None
+    drive_failed_month: str | None  # first month whose excel/Drive step failed, or None
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 (categorise) + Output — shared by run_pipeline and retry_uncategorised
+# ---------------------------------------------------------------------------
+
+
+def _categorise_pending(
+    store,
+    *,
+    analyser_client=None,
+    drive_service=None,
+    sanitise_log_dir=None,
+    output_dir=None,
+    errors: list[str],
+) -> _CategoriseOutcome:
+    """Categorise EVERY currently-uncategorised row, then rebuild affected months.
+
+    This is the single implementation of Layer 3 (FR-14) + Output (FR-30, FR-31),
+    reused by both run_pipeline (right after add_new) and retry_uncategorised (orphan
+    recovery without a fresh upload) so there is no divergent categorisation logic.
+
+    Steps (identical to the original inline pipeline block):
+      1. Read store.uncategorised() — rows just inserted PLUS earlier orphans.
+      2. Deterministic Splitwise self-tag pass on the RAW local description, BEFORE
+         sanitise(): the owner's own tag (e.g. "Splitwise utilities") lives in a
+         PayID/Osko reference the sanitiser would eat / fail-closed-drop, so the LLM
+         can never see it. These rows are categorised locally and EXCLUDED from the
+         off-machine payload (privacy: the reference may carry a friend's name).
+      3. Sanitise the remaining rows — fail-closed (FR-16..FR-21).
+      4. Build the "TAXONOMY & CONTEXT" preamble from the owner's stored category
+         hints (local-only, never transaction text). Few-shot learning is GATED by
+         the ``corrections_enabled`` app setting (default OFF): when off, ZERO
+         examples are injected and the preamble is byte-identical to the
+         no-corrections form; when on, recent (already sanitiser-scrubbed)
+         corrections are appended. user_prompt is never affected either way.
+      5. categorise() — short-circuits with ZERO HTTP calls on an empty payload;
+         AnalyserError (all tiers down) is caught, not propagated, so the persisted
+         rows stay NULL-category orphans for a later recovery run.
+      6. Rebuild one workbook per distinct month touched (skipped entirely when
+         categorisation wholly failed, to avoid a partial backup).
+
+    The only off-machine call is inside categorise() (the analyser), which receives
+    ONLY the sanitised (row_index, cleaned_description, amount) tuples. Safe error
+    strings are appended to ``errors``; raw data never appears there.
+    """
+    to_categorise = store.uncategorised()
+
+    splitwise_mapping: dict[int, str] = {}
+    remaining: list = []
+    for row in to_categorise:
+        label = match_splitwise_tag(row.description)
+        if label is not None:
+            splitwise_mapping[row.id] = label
+        else:
+            remaining.append(row)
+
+    tagged_rows = [r for r in to_categorise if r.id in splitwise_mapping]
+    splitwise_count = (
+        store.set_categories(splitwise_mapping) if splitwise_mapping else 0
+    )
+
+    # Rebind so the list handed to sanitise() and re-indexed in the mapping below is
+    # the SAME shrunken list — preserves the row_index = enumerate-position invariant.
+    to_categorise = remaining
+
+    sresult = sanitise(to_categorise, audit=True, log_dir=sanitise_log_dir)
+
+    # Few-shot learning is opt-in (corrections_enabled, default OFF). When off, an
+    # empty tuple is injected so the preamble is byte-identical to the
+    # no-corrections form.
+    corrections = (
+        store.recent_corrections()
+        if store.get_bool_setting("corrections_enabled", False)
+        else ()
+    )
+    preamble = build_context_prompt(store.get_category_context(), corrections)
+
+    categorisation_failed = False
+    try:
+        analysis = categorise(sresult, client=analyser_client, context_preamble=preamble)
+    except AnalyserError:
+        categorisation_failed = True
+        errors.append("categorisation failed - transactions saved as pending")
+        analysis = None
+
+    if analysis is not None:
+        # Map row_index (position in to_categorise) back to the row's primary-key id.
+        mapping = {
+            to_categorise[ri].id: cat
+            for ri, cat in analysis.categories.items()
+            if ri < len(to_categorise)  # defensive: ignore out-of-range indexes
+        }
+        categorised = store.set_categories(mapping) + splitwise_count
+        model_used = analysis.model_used
+    else:
+        # Only the deterministic Splitwise rows (if any) were categorised this pass.
+        categorised = splitwise_count
+        model_used = ""
+
+    # Output — one workbook per distinct month touched (skipped when categorisation
+    # wholly failed: the rows are still orphans, so a workbook would be incomplete
+    # and a Drive upload would overwrite the last good backup with partial data).
+    excel_path: str | None = None
+    drive_file_id: str | None = None
+    year_month: str | None = None
+    drive_failed_month: str | None = None
+
+    months: list[str] = []
+    if not categorisation_failed:
+        months = sorted(
+            {row.date[:7] for row in to_categorise}
+            | {row.date[:7] for row in tagged_rows}
+        )
+
+    for ym in months:
+        try:
+            path = build_workbook(
+                ym,
+                store.transactions_for_month(ym),
+                store.summary(ym),
+                output_dir=output_dir,
+            )
+            yr, mo = ym.split("-")
+            fid = upload_file(path, year=yr, month=mo, service=drive_service)
+            excel_path = str(path)
+            drive_file_id = fid
+            year_month = ym
+        except Exception:
+            # Never include exception str — it could contain file paths or raw data.
+            errors.append(f"excel/drive step failed for {ym}")
+            if drive_failed_month is None:
+                drive_failed_month = ym
+
+    return _CategoriseOutcome(
+        categorised=categorised,
+        model_used=model_used,
+        categorisation_failed=categorisation_failed,
+        excel_path=excel_path,
+        drive_file_id=drive_file_id,
+        year_month=year_month,
+        drive_failed_month=drive_failed_month,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -317,137 +476,35 @@ def run_pipeline(
     store.add_new(result)
 
     # ------------------------------------------------------------------
-    # Layer 3 — categorise only-new (FR-14)
+    # Layer 3 (categorise only-new, FR-14) + Output (Excel + optional Drive).
     # ------------------------------------------------------------------
-    # Categorise EVERY currently-uncategorised row read straight from the store:
-    # the rows just inserted by add_new PLUS any recovered orphans from earlier
-    # failed runs. Reading from the store (not just result.new_transactions) is
-    # what closes the NULL-category orphan hole. UncategorisedRow carries .id,
-    # .description and .amount — all sanitise() needs.
-    to_categorise = store.uncategorised()
-
-    # Deterministic Splitwise self-tag pass — BEFORE sanitise(), on the RAW local
-    # description. The owner writes their own tag (e.g. "Splitwise utilities") into
-    # PayID/Osko references; the sanitiser would eat those words or fail-closed-drop
-    # the whole P2P row, so the LLM can never see the tag. We categorise these rows
-    # here and EXCLUDE them from the LLM payload (privacy: the reference may carry a
-    # friend's name, and it never leaves the machine).
-    splitwise_mapping: dict[int, str] = {}
-    remaining: list = []
-    for row in to_categorise:
-        label = match_splitwise_tag(row.description)
-        if label is not None:
-            splitwise_mapping[row.id] = label
-        else:
-            remaining.append(row)
-
-    tagged_rows = [r for r in to_categorise if r.id in splitwise_mapping]
-    splitwise_count = (
-        store.set_categories(splitwise_mapping) if splitwise_mapping else 0
+    # Delegated to _categorise_pending() so the orphan-recovery endpoint
+    # (retry_uncategorised) runs the byte-identical sanitise -> preamble ->
+    # categorise -> set_categories -> rebuild-workbooks path without a fresh
+    # upload. It categorises EVERY currently-uncategorised row (the rows just
+    # inserted by add_new PLUS any recovered orphans from earlier failed runs),
+    # which is what closes the NULL-category orphan hole.
+    outcome = _categorise_pending(
+        store,
+        analyser_client=analyser_client,
+        drive_service=drive_service,
+        sanitise_log_dir=sanitise_log_dir,
+        output_dir=output_dir,
+        errors=errors,
     )
-
-    # Rebind so the list handed to sanitise() and re-indexed in the mapping below is
-    # the SAME shrunken list — preserves the row_index = enumerate-position invariant.
-    to_categorise = remaining
-
-    # Sanitise before any off-machine call — fail-closed (FR-16..FR-21).
-    sresult = sanitise(to_categorise, audit=True, log_dir=sanitise_log_dir)
-
-    # Build the "TAXONOMY & CONTEXT" preamble from the owner's stored category
-    # hints (local-only data — never transaction text) and prepend it to the
-    # system prompt. The pipeline owns the Store, so it builds this here to keep
-    # the analyser decoupled from Store (it only ever receives strings).
-    #
-    # Few-shot learning: recent manual corrections (already sanitiser-scrubbed
-    # cleaned_description + category — never a raw description) are appended as
-    # "Examples of how the owner has corrected categories:" so future
-    # categorisation follows the owner's past overrides. user_prompt is unchanged.
-    preamble = build_context_prompt(
-        store.get_category_context(),
-        store.recent_corrections(),
-    )
-
-    # categorise() short-circuits with zero HTTP calls when sresult.payload is empty.
-    # AnalyserError (all model tiers failed / OpenRouter down) is caught here rather
-    # than propagated: the rows already persisted by add_new stay uncategorised
-    # (NULL category) as orphans and are recovered on a later run (see the
-    # pending_uncategorised recovery above). The run still returns a RunReport and
-    # fires the categorisation_failed notification below.
-    categorisation_failed = False
-    try:
-        analysis = categorise(sresult, client=analyser_client, context_preamble=preamble)
-    except AnalyserError:
-        categorisation_failed = True
-        errors.append("categorisation failed - transactions saved as pending")
-        analysis = None
-
-    if analysis is not None:
-        # Map row_index (position in to_categorise) back to the row's primary-key id
-        # so set_categories writes by id.  sanitise() assigns row_index = enumerate
-        # position, so to_categorise[ri] is the row that produced category `cat`.
-        mapping = {
-            to_categorise[ri].id: cat
-            for ri, cat in analysis.categories.items()
-            if ri < len(to_categorise)  # defensive: ignore out-of-range indexes
-        }
-        categorised = store.set_categories(mapping) + splitwise_count
-        model_used = analysis.model_used
-    else:
-        # Only the deterministic Splitwise rows (if any) were categorised this run.
-        categorised = splitwise_count
-        model_used = ""
+    categorised = outcome.categorised
+    model_used = outcome.model_used
+    categorisation_failed = outcome.categorisation_failed
+    excel_path = outcome.excel_path
+    drive_file_id = outcome.drive_file_id
+    year_month = outcome.year_month
+    drive_failed_month = outcome.drive_failed_month
 
     logger.info(
         "pipeline categorised %d rows via model %r",
         categorised,
         model_used or "(none)",
     )
-
-    # ------------------------------------------------------------------
-    # Output — Excel workbook + optional Drive upload (FR-30, FR-31)
-    # Only runs when there is genuinely-new data this run.
-    # ------------------------------------------------------------------
-    excel_path: str | None = None
-    drive_file_id: str | None = None
-    year_month: str | None = None
-    # First month whose Excel/Drive step failed (for the drive_backup_failed copy).
-    drive_failed_month: str | None = None
-
-    # Skip the workbook/backup step entirely when categorisation wholly failed —
-    # the rows are still uncategorised orphans, so a workbook would be incomplete
-    # and a Drive upload would overwrite last good backup with partial data. The
-    # orphan-recovery run that later categorises them rebuilds the month then.
-    months: list[str] = []
-    if not categorisation_failed:
-        # Build one workbook per distinct month touched this run: months present in
-        # the new transactions PLUS months of any recovered orphan rows (so a run
-        # that only fixed previously-NULL categories still refreshes their workbook).
-        # Multi-month uploads (overlapping exports) produce one file per month.
-        months = sorted(
-            {t.date.isoformat()[:7] for t in result.new_transactions}
-            | {row.date[:7] for row in to_categorise}
-            | {row.date[:7] for row in tagged_rows}
-        )
-
-    for ym in months:
-        try:
-            path = build_workbook(
-                ym,
-                store.transactions_for_month(ym),
-                store.summary(ym),
-                output_dir=output_dir,
-            )
-            yr, mo = ym.split("-")
-            fid = upload_file(path, year=yr, month=mo, service=drive_service)
-            # Record the last successfully-written month (most recent after sort).
-            excel_path = str(path)
-            drive_file_id = fid
-            year_month = ym
-        except Exception:
-            # Never include exception str — it could contain file paths or raw data.
-            errors.append(f"excel/drive step failed for {ym}")
-            if drive_failed_month is None:
-                drive_failed_month = ym
 
     # ------------------------------------------------------------------
     # Notify — exactly one terminal notification, by severity priority.
@@ -486,3 +543,65 @@ def run_pipeline(
         errors=errors,
         balance_updates=balance_updates,
     )
+
+
+# ---------------------------------------------------------------------------
+# Orphan recovery — re-run categorisation over NULL-category rows (no re-upload)
+# ---------------------------------------------------------------------------
+
+
+def retry_uncategorised(
+    store,
+    *,
+    analyser_client=None,       # OpenRouterClient | fake; None → lazy-construct real one
+    drive_service=None,         # injected Drive service; None → env-gated Drive
+    sanitise_log_dir=None,      # forwarded to sanitise(log_dir=...); tests pass tmp_path
+    output_dir=None,            # forwarded to build_workbook(output_dir=...); tests pass tmp_path
+) -> dict:
+    """Re-run categorisation over the store's NULL-category rows WITHOUT a re-upload.
+
+    Owner-initiated orphan recovery (the app's "retry" button) for rows left
+    uncategorised by an earlier failed / rate-limited run. Reuses the exact same
+    _categorise_pending() path as the pipeline (sanitise -> gated few-shot preamble
+    -> categorise -> set_categories -> rebuild the affected months' workbooks), so
+    there is no divergent logic.
+
+    The only off-machine call is inside categorise() (the analyser), which receives
+    ONLY the sanitised (row_index, cleaned_description, amount) tuples. Never raises.
+
+    Returns
+    -------
+    dict
+      - No pending rows:            {"ok": True,  "categorised": 0, "remaining": 0}
+      - Success:                    {"ok": True,  "categorised": n, "remaining": m}
+      - OpenRouter down / all tiers failed (AnalyserError caught inside
+        _categorise_pending): {"ok": False, "categorised": 0, "remaining": m,
+                               "detail": "categoriser unavailable"}
+    """
+    if not store.uncategorised():
+        return {"ok": True, "categorised": 0, "remaining": 0}
+
+    errors: list[str] = []
+    outcome = _categorise_pending(
+        store,
+        analyser_client=analyser_client,
+        drive_service=drive_service,
+        sanitise_log_dir=sanitise_log_dir,
+        output_dir=output_dir,
+        errors=errors,
+    )
+
+    if outcome.categorisation_failed:
+        # OpenRouter down / all tiers failed — rows stay pending, safe status string.
+        return {
+            "ok": False,
+            "categorised": 0,
+            "remaining": len(store.uncategorised()),
+            "detail": "categoriser unavailable",
+        }
+
+    return {
+        "ok": True,
+        "categorised": outcome.categorised,
+        "remaining": len(store.uncategorised()),
+    }

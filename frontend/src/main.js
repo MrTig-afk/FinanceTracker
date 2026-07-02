@@ -17,6 +17,7 @@ import { createMonthly } from './monthlyController.js';
 import { createYearly } from './yearlyController.js';
 import { createTrends } from './trendsController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
+import { createSettings } from './settingsController.js';
 import { createPushController } from './push.js';
 import { createToast } from './toast.js';
 import { createNotificationBridge } from './notifications.js';
@@ -133,6 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let monthly = null;
   let yearly = null;
   let trends = null;
+  let settings = null;
 
   const views = initViews({
     root: document,
@@ -153,7 +155,11 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (view === 'yearly') {
         if (!yearly) yearly = createYearly({ root: document });
         yearly.load();
+      } else if (view === 'settings') {
+        if (!settings) settings = createSettings({ root: document });
+        settings.load();
       }
+      // 'contact' is static — no controller needed.
     },
   });
 

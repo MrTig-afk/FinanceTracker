@@ -566,3 +566,74 @@ class TestSendNotificationCatalog:
         cfg = _enabled_config()
         assert send_monthly_reminder(store, config=cfg) == 1
         assert captured[0]["type"] == "monthly_reminder"
+
+
+# ---------------------------------------------------------------------------
+# TestPerTypeGate — Feature E per-type opt-out gate at the TOP of send_notification.
+#
+# Isolates the gate from delivery by stubbing _deliver, so the assertions are
+# purely about whether the gate short-circuits. Uses a real in-memory Store to
+# drive the notify:<ntype> flag. No network anywhere.
+# ---------------------------------------------------------------------------
+
+
+class TestPerTypeGate:
+    @staticmethod
+    def _stub_deliver(monkeypatch):
+        import backend.notifier.notifier as notifier_mod
+
+        calls: list[int] = []
+
+        def _fake(store, payload, config):  # noqa: ARG001 — signature parity only
+            calls.append(1)
+            return 99
+
+        monkeypatch.setattr(notifier_mod, "_deliver", _fake)
+        return calls
+
+    def test_disabled_type_is_hard_noop(self, monkeypatch):
+        from backend.store import Store
+
+        calls = self._stub_deliver(monkeypatch)
+        store = Store(":memory:")
+        store.set_bool_setting("notify:processed", False)
+        try:
+            assert send_notification(store, "processed", count=3) == 0
+            # Hard no-op: delivery is never reached when the type is disabled.
+            assert calls == []
+        finally:
+            store.close()
+
+    def test_enabled_type_reaches_delivery(self, monkeypatch):
+        from backend.store import Store
+
+        calls = self._stub_deliver(monkeypatch)
+        store = Store(":memory:")  # default: every type enabled (opt-out model)
+        try:
+            assert send_notification(store, "processed", count=3) == 99
+            assert calls == [1]
+        finally:
+            store.close()
+
+    def test_default_unset_type_is_enabled(self, monkeypatch):
+        from backend.store import Store
+
+        calls = self._stub_deliver(monkeypatch)
+        store = Store(":memory:")  # never configured -> default True
+        try:
+            assert send_notification(store, "parse_error", detail="CommBank") == 99
+            assert calls == [1]
+        finally:
+            store.close()
+
+    def test_monthly_reminder_respects_its_gate(self, monkeypatch):
+        from backend.store import Store
+
+        calls = self._stub_deliver(monkeypatch)
+        store = Store(":memory:")
+        store.set_bool_setting("notify:monthly_reminder", False)
+        try:
+            assert send_monthly_reminder(store) == 0
+            assert calls == []
+        finally:
+            store.close()

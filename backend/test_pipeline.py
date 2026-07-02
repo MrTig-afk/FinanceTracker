@@ -1426,3 +1426,137 @@ class TestPushNotificationInvocation:
         assert report is not None
         assert report.noop is False
         assert report.new_txns == 5
+
+
+# ---------------------------------------------------------------------------
+# TestCorrectionsEnabledGateInjection — Feature E opt-in gate on few-shot examples
+#
+# corrections_enabled is OFF by default. When off, the pipeline injects ZERO
+# few-shot examples (the preamble is byte-identical to the no-corrections form).
+# When on, the owner's recorded corrections appear in the system prompt.
+# ---------------------------------------------------------------------------
+
+_EXAMPLES_HEADER = "Examples of how the owner has corrected categories:"
+
+
+class TestCorrectionsEnabledGateInjection:
+    def _run(self, store, fake, tmp_path):
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+    def test_off_by_default_injects_no_examples(self, tmp_path):
+        store = Store(":memory:")
+        store.record_correction("SYNTH CORNER STORE", "Dining Out")
+        fake = FakeAnalyserClient()
+        self._run(store, fake, tmp_path)
+        store.close()
+
+        assert fake.received_system_prompts  # the analyser WAS called
+        for prompt in fake.received_system_prompts:
+            assert _EXAMPLES_HEADER not in prompt
+
+    def test_on_injects_recorded_examples(self, tmp_path):
+        store = Store(":memory:")
+        store.record_correction("SYNTH CORNER STORE", "Dining Out")
+        store.set_bool_setting("corrections_enabled", True)
+        fake = FakeAnalyserClient()
+        self._run(store, fake, tmp_path)
+        store.close()
+
+        assert any(
+            _EXAMPLES_HEADER in p and "SYNTH CORNER STORE -> Dining Out" in p
+            for p in fake.received_system_prompts
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestRetryUncategorised — orphan recovery without a re-upload (Feature E)
+# ---------------------------------------------------------------------------
+
+
+def _seed_uncat(store, rows):
+    """rows: (fp, date, description, amount, bank, year_month) — category NULL."""
+    store.conn.executemany(
+        "INSERT INTO transactions"
+        "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+        " VALUES (?,?,?,?,?,NULL,?,'t')",
+        rows,
+    )
+    store.conn.commit()
+
+
+class _RaisingAnalyserClient:
+    """Stand-in whose complete() always raises AnalyserError (OpenRouter down)."""
+
+    def complete(self, *, system_prompt, user_prompt):  # noqa: ARG002 — signature parity
+        raise AnalyserError("all model tiers failed")
+
+
+class TestRetryUncategorised:
+    def test_empty_is_noop_no_client_needed(self):
+        from backend.pipeline import retry_uncategorised
+
+        store = Store(":memory:")
+        try:
+            # No pending rows: returns immediately, no analyser construction/network.
+            assert retry_uncategorised(store) == {
+                "ok": True,
+                "categorised": 0,
+                "remaining": 0,
+            }
+        finally:
+            store.close()
+
+    def test_happy_path_categorises_orphans(self, tmp_path):
+        from backend.pipeline import retry_uncategorised
+
+        store = Store(":memory:")
+        _seed_uncat(store, [
+            ("rf1", "2026-06-01", "SYNTH GROCER", "-12.00", "commbank", "2026-06"),
+            ("rf2", "2026-06-02", "SYNTH DELI", "-3.50", "commbank", "2026-06"),
+        ])
+        fake = FakeAnalyserClient()
+        try:
+            out = retry_uncategorised(
+                store,
+                analyser_client=fake,
+                drive_service=None,
+                output_dir=tmp_path,
+                sanitise_log_dir=tmp_path,
+            )
+            assert out == {"ok": True, "categorised": 2, "remaining": 0}
+            assert store.uncategorised() == []
+        finally:
+            store.close()
+
+    def test_analyser_error_returns_safe_dict(self, tmp_path):
+        from backend.pipeline import retry_uncategorised
+
+        store = Store(":memory:")
+        _seed_uncat(store, [
+            ("rf1", "2026-06-01", "SYNTH GROCER", "-12.00", "commbank", "2026-06"),
+        ])
+        try:
+            out = retry_uncategorised(
+                store,
+                analyser_client=_RaisingAnalyserClient(),
+                drive_service=None,
+                output_dir=tmp_path,
+                sanitise_log_dir=tmp_path,
+            )
+            assert out == {
+                "ok": False,
+                "categorised": 0,
+                "remaining": 1,
+                "detail": "categoriser unavailable",
+            }
+            # Rows stay pending for a later recovery run.
+            assert len(store.uncategorised()) == 1
+        finally:
+            store.close()

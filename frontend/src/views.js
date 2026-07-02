@@ -33,6 +33,14 @@ const VIEW_COPY = {
     title: 'Yearly',
     subtitle: 'One year’s breakdown, and how each category moved vs the previous year.',
   },
+  settings: {
+    title: 'Settings',
+    subtitle: 'Manage notifications, data, the categoriser, and learned corrections.',
+  },
+  contact: {
+    title: 'Contact',
+    subtitle: 'Get in touch with the maintainer.',
+  },
 };
 
 const DEFAULT_VIEW = 'overview';

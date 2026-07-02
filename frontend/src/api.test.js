@@ -18,6 +18,16 @@ import {
   postCategoryOverride,
   postPushSubscribe,
   postPushUnsubscribe,
+  getSettings,
+  putSettings,
+  getCorrections,
+  deleteCorrection,
+  getCategoriserStatus,
+  postCategoriserTest,
+  postCategoriserRetry,
+  postReset,
+  transactionsCsvUrl,
+  API_BASE,
   ApiError,
 } from './api.js';
 
@@ -552,6 +562,179 @@ describe('saveCategoryContext', () => {
     vi.stubGlobal('fetch', makeNetworkFailFetch());
     const err = await saveCategoryContext([{ name: 'Groceries', hints: 'x' }]).catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Settings + Feature E endpoints (getSettings / putSettings / corrections /
+// categoriser / reset / csv url). SYNTHETIC fixtures only.
+// ---------------------------------------------------------------------------
+
+const CANNED_SETTINGS = {
+  corrections_enabled: false,
+  notifications: { processed: true, monthly_reminder: false },
+};
+
+describe('getSettings', () => {
+  it('GETs /settings and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch(CANNED_SETTINGS);
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await getSettings();
+    expect(result).toEqual(CANNED_SETTINGS);
+    expect(mockFetch.mock.calls[0][0]).toContain('/settings');
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(getSettings()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await getSettings().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+describe('putSettings', () => {
+  it('PUTs the partial JSON body to /settings', async () => {
+    const mockFetch = makeOkFetch(CANNED_SETTINGS);
+    vi.stubGlobal('fetch', mockFetch);
+    await putSettings({ notifications: { processed: false } });
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/settings');
+    expect(options.method).toBe('PUT');
+    expect(options.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(options.body)).toEqual({ notifications: { processed: false } });
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(422));
+    await expect(putSettings({ corrections_enabled: true })).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await putSettings({}).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+const CANNED_CORRECTIONS = {
+  enabled: true,
+  corrections: [
+    { id: 1, cleaned_description: 'SYNTH MERCHANT', category: 'Dining Out', created_at: '2026-06-01' },
+  ],
+};
+
+describe('getCorrections', () => {
+  it('GETs /corrections and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch(CANNED_CORRECTIONS);
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await getCorrections();
+    expect(result).toEqual(CANNED_CORRECTIONS);
+    expect(mockFetch.mock.calls[0][0]).toContain('/corrections');
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await getCorrections().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+describe('deleteCorrection', () => {
+  it('DELETEs /corrections/{id}', async () => {
+    const mockFetch = makeOkFetch({ ok: true, removed: 1 });
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await deleteCorrection(7);
+    expect(result).toEqual({ ok: true, removed: 1 });
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/corrections/7');
+    expect(options.method).toBe('DELETE');
+  });
+
+  it('rejects with ApiError carrying the status on a 404', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(404));
+    const err = await deleteCorrection(999).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+});
+
+describe('getCategoriserStatus', () => {
+  it('GETs /categoriser/status and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch({ configured: true, uncategorised_count: 4 });
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await getCategoriserStatus();
+    expect(result).toEqual({ configured: true, uncategorised_count: 4 });
+    expect(mockFetch.mock.calls[0][0]).toContain('/categoriser/status');
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await getCategoriserStatus().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+describe('postCategoriserTest', () => {
+  it('POSTs /categoriser/test and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch({ configured: true, reachable: true, rate_limited: false, detail: '' });
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await postCategoriserTest();
+    expect(result.reachable).toBe(true);
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/categoriser/test');
+    expect(options.method).toBe('POST');
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(postCategoriserTest()).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe('postCategoriserRetry', () => {
+  it('POSTs /categoriser/retry and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch({ ok: true, categorised: 3, remaining: 0 });
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await postCategoriserRetry();
+    expect(result).toEqual({ ok: true, categorised: 3, remaining: 0 });
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/categoriser/retry');
+    expect(options.method).toBe('POST');
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await postCategoriserRetry().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+describe('postReset', () => {
+  it('POSTs {confirm} JSON body to /reset', async () => {
+    const mockFetch = makeOkFetch({ ok: true, cleared: {} });
+    vi.stubGlobal('fetch', mockFetch);
+    await postReset('RESET');
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/reset');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body)).toEqual({ confirm: 'RESET' });
+  });
+
+  it('rejects with ApiError carrying the status on a 400 (wrong confirm)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await postReset('nope').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+});
+
+describe('transactionsCsvUrl', () => {
+  it('returns the CSV export URL under API_BASE (no network call)', () => {
+    expect(transactionsCsvUrl()).toBe(`${API_BASE}/export/transactions.csv`);
   });
 });
 

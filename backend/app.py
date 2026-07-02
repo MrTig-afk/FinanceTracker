@@ -16,6 +16,16 @@ POST /push/subscribe    Store a Web Push subscription locally (v2 Pass 3 scaffol
 POST /push/unsubscribe  Remove a stored Web Push subscription by endpoint.
 POST /notify/monthly-reminder  Fire the "new month, upload your statements" push
                 (for the always-on scheduler; fail-closed no-op when push is off).
+GET  /settings  Owner preferences: corrections_enabled (Feature B gate, default OFF)
+                + per-type notification toggles (default ON).
+PUT  /settings  Partial update of the above (unknown notification keys ignored).
+GET  /export/transactions.csv  Local CSV download of ALL transactions (owner's data).
+POST /reset     Wipe all transaction data (confirm=='RESET'); keep device + prefs.
+GET  /categoriser/status  configured bool + uncategorised_count (no network).
+POST /categoriser/test    Live minimal OpenRouter probe (no txn data; never raises).
+POST /categoriser/retry   Re-run categorisation over NULL-category rows (no re-upload).
+GET  /corrections         List stored corrections + Feature B enabled flag.
+DELETE /corrections/{cid} Remove one stored correction by id.
 
 Privacy contract
 ----------------
@@ -49,7 +59,9 @@ Effective CORS origins are logged at startup (origins only, never secrets).
 """
 from __future__ import annotations
 
+import csv
 import dataclasses
+import io
 import logging
 import os
 import re
@@ -61,12 +73,14 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from backend.analyser import AnalyserError, OpenRouterClient
 from backend.data_source import Bank
 from backend.drive_uploader import is_configured
-from backend.notifier import send_monthly_reminder, send_notification
-from backend.pipeline import RunReport, UploadedFile, run_pipeline
+from backend.notifier import NOTIFICATION_TYPES, send_monthly_reminder, send_notification
+from backend.pipeline import RunReport, UploadedFile, retry_uncategorised, run_pipeline
 from backend.store import Store, TAXONOMY
 
 # The pure scrub helpers are reused (not the full sanitise() batch path) to clean a
@@ -131,7 +145,7 @@ app = FastAPI(lifespan=lifespan, title="FinanceTracker")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["GET", "POST", "PUT"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -184,6 +198,28 @@ class PushSubscriptionIn(BaseModel):
 
 class PushUnsubscribeIn(BaseModel):
     endpoint: str = Field(min_length=1, max_length=1024)
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models — settings (Feature E) and reset bodies
+# ---------------------------------------------------------------------------
+
+
+class SettingsIn(BaseModel):
+    """Partial settings update. Only provided (non-None) fields are applied.
+
+    corrections_enabled gates Feature B (manual-correction few-shot learning).
+    notifications maps a notification type -> enabled; unknown keys are ignored.
+    """
+
+    corrections_enabled: bool | None = None
+    notifications: dict[str, bool] | None = None
+
+
+class ResetIn(BaseModel):
+    """Destructive reset confirmation. The handler requires confirm == 'RESET'."""
+
+    confirm: str = Field(min_length=1, max_length=32)
 
 
 # ---------------------------------------------------------------------------
@@ -505,9 +541,12 @@ async def category_override(body: CategoryOverrideIn):
       2. Set that transaction's category (local SQLite write only).
       3. Look up the transaction's RAW description, scrub it through the sanitiser,
          and record the (cleaned_description, category) correction so future runs get
-         it as a few-shot example. Fail-closed: if the description scrubs to nothing
-         safe, the category is still set but NO correction is stored — an
-         un-sanitisable string is never persisted or sent off-machine.
+         it as a few-shot example. This recording is GATED by the opt-in
+         ``corrections_enabled`` setting (default OFF, Feature E): when off, the
+         category override still applies but NO correction is recorded. Fail-closed:
+         even when on, if the description scrubs to nothing safe the category is still
+         set but NO correction is stored — an un-sanitisable string is never persisted
+         or sent off-machine.
 
     LOCAL-ONLY edit of the owner's own store — same local-serve posture as
     /reclassify. Returns the updated month summary so the dashboard can re-render.
@@ -530,10 +569,13 @@ async def category_override(body: CategoryOverrideIn):
     # Set the category (local write only).
     store.set_categories({key: body.category})
 
-    # Scrub the raw description and record the correction — fail-closed on residue.
-    cleaned = scrub_description(raw)
-    if not has_residual_identifier(cleaned):
-        store.record_correction(cleaned, body.category)
+    # Scrub the raw description and record the correction — but ONLY when the owner
+    # has opted in (corrections_enabled, default OFF) AND it scrubs to something safe
+    # (fail-closed on residue). Both conditions must hold before anything is stored.
+    if store.get_bool_setting("corrections_enabled", False):
+        cleaned = scrub_description(raw)
+        if not has_residual_identifier(cleaned):
+            store.record_correction(cleaned, body.category)
 
     return store.summary()
 
@@ -620,6 +662,242 @@ async def notify_monthly_reminder():
     """
     sent = send_monthly_reminder(app.state.store)
     return {"ok": True, "sent": sent}
+
+
+# ---------------------------------------------------------------------------
+# GET/PUT /settings  (Feature E — owner preferences: corrections + notifications)
+# ---------------------------------------------------------------------------
+
+
+def _settings_response() -> dict:
+    """Serialise current owner settings in the GET/PUT /settings response shape.
+
+    corrections_enabled defaults to False (Feature B is opt-in). Each notification
+    type defaults to True (opt-out model). LOCAL-ONLY read of the owner's own store.
+    """
+    store = app.state.store
+    return {
+        "corrections_enabled": store.get_bool_setting("corrections_enabled", False),
+        "notifications": {
+            ntype: store.notification_enabled(ntype) for ntype in NOTIFICATION_TYPES
+        },
+    }
+
+
+@app.get("/settings")
+async def get_settings():
+    """Return the owner's preferences (Feature B gate + per-type notification toggles).
+
+    Local serve to the owner's own client — same posture as /summary. No secrets.
+    """
+    return _settings_response()
+
+
+@app.put("/settings")
+async def put_settings(body: SettingsIn):
+    """Apply a PARTIAL settings update; return the full settings in the GET shape.
+
+    Only provided (non-None) fields are written. For ``notifications``, only keys in
+    NOTIFICATION_TYPES are accepted (unknown keys are ignored silently). Preferences
+    persist in local SQLite only — no off-machine call.
+    """
+    store = app.state.store
+    if body.corrections_enabled is not None:
+        store.set_bool_setting("corrections_enabled", body.corrections_enabled)
+    if body.notifications is not None:
+        for ntype, enabled in body.notifications.items():
+            if ntype in NOTIFICATION_TYPES:
+                store.set_bool_setting(f"notify:{ntype}", bool(enabled))
+    return _settings_response()
+
+
+# ---------------------------------------------------------------------------
+# GET /export/transactions.csv  (Feature E — local CSV download of all rows)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/export/transactions.csv")
+async def export_transactions_csv():
+    """Download ALL transactions as a CSV file (LOCAL serve of the owner's own data).
+
+    Columns: date, description, amount, category, bank, year_month; ordered by date
+    then id. The CSV is built in-memory with the stdlib csv module (RFC-4180 quoting),
+    so descriptions containing commas/quotes are escaped correctly. This is the owner's
+    own data served to the owner's own client into a download they explicitly
+    requested; nothing here is ever sent off-machine. Money values are the stored
+    canonical str(Decimal), never float.
+    """
+    rows = app.state.store.all_transactions_for_export()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["date", "description", "amount", "category", "bank", "year_month"])
+    for r in rows:
+        writer.writerow(
+            [
+                r["date"],
+                r["description"],
+                r["amount"],
+                r["category"] if r["category"] is not None else "",
+                r["bank"],
+                r["year_month"],
+            ]
+        )
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="financetracker-transactions.csv"'
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /reset  (Feature E — wipe all transaction data; keep device + prefs)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/reset")
+async def reset(body: ResetIn):
+    """Wipe all transaction data after an explicit confirmation.
+
+    Body (JSON): ``{"confirm": "RESET"}`` — anything else is a 400. On confirmation,
+    DELETEs transactions/file_fingerprints/corrections and re-seeds category_context
+    to defaults, while PRESERVING push_subscription (device stays subscribed) and
+    app_settings (preferences kept). LOCAL-ONLY destructive op; no off-machine call.
+    Returns ``{"ok": True, "cleared": {"transactions": n, ...}}``.
+    """
+    if body.confirm != "RESET":
+        raise HTTPException(status_code=400, detail="confirmation required")
+
+    cleared = app.state.store.reset_all_data()
+    return {"ok": True, "cleared": cleared}
+
+
+# ---------------------------------------------------------------------------
+# Categoriser health — GET /categoriser/status, POST /categoriser/test|retry
+# ---------------------------------------------------------------------------
+
+
+def _probe_openrouter(client_factory=OpenRouterClient) -> dict:
+    """Owner-initiated LIVE connectivity probe for OpenRouter. Never raises.
+
+    Carries NO transaction data — a minimal fixed "ping" call only. The sole
+    sanctioned off-machine endpoint. ``client_factory`` is injectable so tests can
+    supply a fake client and never touch the network.
+
+    Returns a dict with ``configured``/``reachable``/``rate_limited``/``detail``:
+      - key unset:      configured False, no call attempted.
+      - success:        reachable True.
+      - AnalyserError naming 429 / "rate": rate_limited True (shared free-tier).
+      - any other error: reachable False (safe generic detail; never echoes the
+        raw exception text or the API key).
+    """
+    if not os.getenv("OPENROUTER_API_KEY"):
+        return {
+            "configured": False,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "OpenRouter API key not configured",
+        }
+
+    try:
+        client = client_factory()
+        client.complete(system_prompt="ping", user_prompt="ping")
+    except AnalyserError as exc:
+        message = str(exc).lower()
+        if "429" in message or "rate" in message:
+            return {
+                "configured": True,
+                "reachable": True,
+                "rate_limited": True,
+                "detail": "Rate limited (shared free-tier throttling)",
+            }
+        return {
+            "configured": True,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "Could not reach OpenRouter",
+        }
+    except Exception:  # noqa: BLE001 — never leak internal detail; safe generic string
+        return {
+            "configured": True,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "Could not reach OpenRouter",
+        }
+
+    return {
+        "configured": True,
+        "reachable": True,
+        "rate_limited": False,
+        "detail": "OpenRouter reachable",
+    }
+
+
+@app.get("/categoriser/status")
+async def categoriser_status():
+    """Report categoriser configuration + pending workload. NO network call.
+
+    ``configured`` is a boolean only (never the key value). ``uncategorised_count``
+    is how many rows still need a category (drives the app's "retry" affordance).
+    """
+    return {
+        "configured": bool(os.getenv("OPENROUTER_API_KEY")),
+        "uncategorised_count": len(app.state.store.uncategorised()),
+    }
+
+
+@app.post("/categoriser/test")
+async def categoriser_test():
+    """Owner-initiated LIVE OpenRouter connectivity probe (see _probe_openrouter).
+
+    Carries NO transaction data (a fixed "ping" only). Never raises; returns a safe
+    status dict. When the key is unset, no call is attempted.
+    """
+    return _probe_openrouter()
+
+
+@app.post("/categoriser/retry")
+async def categoriser_retry():
+    """Re-run categorisation over NULL-category rows WITHOUT a re-upload.
+
+    Ties into the pipeline's orphan-recovery path (retry_uncategorised): reuses the
+    exact sanitise -> gated few-shot preamble -> categorise -> set_categories ->
+    rebuild-workbooks path. Never raises: on OpenRouter being down it returns a safe
+    ``{"ok": False, ..., "detail": "categoriser unavailable"}`` with HTTP 200.
+    """
+    return retry_uncategorised(app.state.store)
+
+
+# ---------------------------------------------------------------------------
+# Learned corrections — GET /corrections, DELETE /corrections/{cid}  (Feature E)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/corrections")
+async def get_corrections():
+    """List the owner's stored category corrections + the Feature B enabled flag.
+
+    LOCAL serve of the owner's own store. Only the already-scrubbed
+    cleaned_description is stored/returned here, never a raw bank description.
+    """
+    store = app.state.store
+    return {
+        "enabled": store.get_bool_setting("corrections_enabled", False),
+        "corrections": store.list_corrections(),
+    }
+
+
+@app.delete("/corrections/{cid}")
+async def delete_correction(cid: int):
+    """Delete one stored correction by id. Idempotent no-op safe.
+
+    Returns ``{"ok": True, "removed": n}`` (n is 0 when the id was not present).
+    """
+    removed = app.state.store.delete_correction(cid)
+    return {"ok": True, "removed": removed}
 
 
 # ---------------------------------------------------------------------------
