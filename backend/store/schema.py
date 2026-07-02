@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS push_subscription (
     auth        TEXT NOT NULL,
     created_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS corrections (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    cleaned_description TEXT NOT NULL UNIQUE,
+    category            TEXT NOT NULL,
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_corrections_created ON corrections(created_at);
 """
 
 

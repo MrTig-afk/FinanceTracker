@@ -1888,3 +1888,66 @@ class TestTransactionsForCategory:
         assert res["month"] is None
         assert res["count"] == 0
         assert res["transactions"] == []
+
+
+# ---------------------------------------------------------------------------
+# TestCorrections — manual category corrections + few-shot recall
+# ---------------------------------------------------------------------------
+
+
+class TestCorrections:
+    """record_correction / recent_corrections — LOCAL-ONLY, dedupe/replace, newest-first."""
+
+    def test_record_and_recent_roundtrip(self):
+        with Store(":memory:") as store:
+            store.record_correction("SYNTH CORNER STORE", "Dining Out")
+            store.record_correction("SYNTH RIDESHARE CO", "Transport")
+            recent = store.recent_corrections()
+        # Newest first: the second insert leads.
+        assert recent == [
+            ("SYNTH RIDESHARE CO", "Transport"),
+            ("SYNTH CORNER STORE", "Dining Out"),
+        ]
+
+    def test_empty_store_returns_empty_list(self):
+        with Store(":memory:") as store:
+            assert store.recent_corrections() == []
+
+    def test_replace_on_repeat_keeps_latest_category(self):
+        with Store(":memory:") as store:
+            store.record_correction("SYNTH CAFE", "Groceries")
+            store.record_correction("SYNTH CAFE", "Dining Out")
+            recent = store.recent_corrections()
+        # Single row for the repeated description, holding the LATEST category.
+        assert recent == [("SYNTH CAFE", "Dining Out")]
+
+    def test_junk_category_coerced_to_other(self):
+        with Store(":memory:") as store:
+            store.record_correction("SYNTH THING", "NotACategory")
+            recent = store.recent_corrections()
+        assert recent == [("SYNTH THING", "Other")]
+
+    def test_limit_caps_and_orders_newest_first(self):
+        with Store(":memory:") as store:
+            for i in range(5):
+                store.record_correction(f"SYNTH MERCHANT {i}", "Other")
+            recent = store.recent_corrections(limit=3)
+        assert len(recent) == 3
+        assert [d for d, _ in recent] == [
+            "SYNTH MERCHANT 4",
+            "SYNTH MERCHANT 3",
+            "SYNTH MERCHANT 2",
+        ]
+
+    def test_transaction_description_by_id_and_fingerprint(self):
+        txn = _txn(desc="SYNTH LOOKUP MERCHANT", amount="-5.00")
+        with Store(":memory:") as store:
+            store.add_new(_result(txn))
+            row = store.uncategorised()[0]
+            assert store.transaction_description(row.id) == "SYNTH LOOKUP MERCHANT"
+            assert (
+                store.transaction_description(row.txn_fingerprint)
+                == "SYNTH LOOKUP MERCHANT"
+            )
+            assert store.transaction_description(999999) is None
+            assert store.transaction_description("no-such-fingerprint") is None

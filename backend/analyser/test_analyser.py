@@ -1099,6 +1099,65 @@ class TestBuildContextPromptGolden:
 
 
 # ---------------------------------------------------------------------------
+# build_context_prompt — few-shot corrections block (manual correction learning)
+# ---------------------------------------------------------------------------
+
+# SYNTHETIC corrections — invented cleaned descriptions, never real transactions.
+_SYNTH_CORRECTIONS = (
+    ("SYNTH CORNER STORE", "Dining Out"),
+    ("SYNTH RIDESHARE CO", "Transport"),
+)
+
+
+class TestBuildContextPromptCorrections:
+    """recent_corrections append a deterministic few-shot examples block; default = unchanged."""
+
+    def test_no_corrections_is_byte_identical_to_single_arg(self):
+        # Back-compat: default (and empty) corrections must not change the output.
+        assert build_context_prompt(_GOLDEN_CATEGORIES) == _GOLDEN_PROMPT
+        assert build_context_prompt(_GOLDEN_CATEGORIES, ()) == _GOLDEN_PROMPT
+        assert build_context_prompt(_GOLDEN_CATEGORIES, []) == _GOLDEN_PROMPT
+
+    def test_corrections_appended_after_blank_line(self):
+        result = build_context_prompt(_GOLDEN_CATEGORIES, _SYNTH_CORRECTIONS)
+        assert result.startswith(_GOLDEN_PROMPT + "\n\n")
+
+    def test_examples_header_and_lines_present_in_order(self):
+        result = build_context_prompt(_GOLDEN_CATEGORIES, _SYNTH_CORRECTIONS)
+        expected_block = (
+            "Examples of how the owner has corrected categories:\n"
+            "SYNTH CORNER STORE -> Dining Out\n"
+            "SYNTH RIDESHARE CO -> Transport"
+        )
+        assert result == _GOLDEN_PROMPT + "\n\n" + expected_block
+
+    def test_only_cleaned_description_and_category_appear(self):
+        # Feed a correction and assert nothing but the two supplied strings render.
+        result = build_context_prompt(_GOLDEN_CATEGORIES, (("SYNTH CAFE", "Dining Out"),))
+        block = result[len(_GOLDEN_PROMPT) + 2:]
+        assert block == (
+            "Examples of how the owner has corrected categories:\n"
+            "SYNTH CAFE -> Dining Out"
+        )
+
+    def test_deterministic_order_preserved(self):
+        # The store supplies newest-first; the builder must preserve that order.
+        result = build_context_prompt([], _SYNTH_CORRECTIONS)
+        first = result.index("SYNTH CORNER STORE")
+        second = result.index("SYNTH RIDESHARE CO")
+        assert first < second
+
+    def test_corrections_do_not_affect_user_prompt(self):
+        # BLOCKING: even with corrections in the system preamble, user_prompt stays
+        # the sanctioned three keys only.
+        preamble = build_context_prompt(_GOLDEN_CATEGORIES, _SYNTH_CORRECTIONS)
+        _, user_prompt = build_prompt(PAYLOAD, context_preamble=preamble)
+        items = json.loads(user_prompt)
+        for item in items:
+            assert set(item.keys()) == {"row_index", "cleaned_description", "amount"}
+
+
+# ---------------------------------------------------------------------------
 # build_prompt — context_preamble prepend (analyser.py)
 # ---------------------------------------------------------------------------
 

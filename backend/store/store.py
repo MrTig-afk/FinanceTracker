@@ -419,6 +419,69 @@ class Store:
         return cursor.rowcount
 
     # ------------------------------------------------------------------
+    # Manual category corrections + few-shot learning (LOCAL-ONLY storage)
+    # ------------------------------------------------------------------
+
+    def record_correction(self, cleaned_description: str, category: str) -> None:
+        """Remember an owner category correction for reuse as a few-shot example.
+
+        `cleaned_description` MUST already be sanitiser-scrubbed by the caller — this
+        table stores ONLY the safe cleaned string, never the raw bank description. The
+        category is passed through coerce_category (unknown/None/'' -> 'Other') so a
+        junk label can never enter the store.
+
+        Dedupe/replace: keyed on the UNIQUE cleaned_description via INSERT ... ON
+        CONFLICT DO UPDATE, so re-correcting the same merchant keeps a single row with
+        its LATEST category and a refreshed created_at (which drives recency ordering).
+        LOCAL-ONLY: this method never sends anything off-machine.
+        """
+        self.conn.execute(
+            """
+            INSERT INTO corrections(cleaned_description, category, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(cleaned_description) DO UPDATE SET
+                category = excluded.category,
+                created_at = excluded.created_at
+            """,
+            (cleaned_description, coerce_category(category), _utc_now_iso()),
+        )
+        self.conn.commit()
+
+    def recent_corrections(self, limit: int = 20) -> list[tuple[str, str]]:
+        """Return the most recent (cleaned_description, category) corrections, newest first.
+
+        Ordered by created_at DESC, id DESC (a deterministic tie-break when two rows
+        share a timestamp). Capped at `limit` (most-recent 20 by default). Returns []
+        when there are no corrections. Feeds the analyser's few-shot examples block via
+        build_context_prompt — only the already-scrubbed cleaned_description leaves as
+        an example, never a raw description.
+        """
+        rows = self.conn.execute(
+            "SELECT cleaned_description, category FROM corrections "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [(row["cleaned_description"], row["category"]) for row in rows]
+
+    def transaction_description(self, key: str | int) -> str | None:
+        """Return the RAW description for a transaction by row id (int) or fingerprint (str).
+
+        RAW, LOCAL-ONLY: the returned string is the owner's own data and must never be
+        sent off-machine directly — the override endpoint scrubs it through the
+        sanitiser before it can become a stored/reused correction example. Returns None
+        when no row matches the key.
+        """
+        if isinstance(key, int):
+            row = self.conn.execute(
+                "SELECT description FROM transactions WHERE id = ?", (key,)
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT description FROM transactions WHERE txn_fingerprint = ?", (key,)
+            ).fetchone()
+        return row["description"] if row is not None else None
+
+    # ------------------------------------------------------------------
     # Layer 1: file fingerprints (FR-12)
     # ------------------------------------------------------------------
 

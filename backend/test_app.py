@@ -8,6 +8,7 @@ Drive unconfigured. DB in tmp_path sqlite.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 
 import pytest
@@ -1057,3 +1058,114 @@ class TestCategoryTransactionsEndpoint:
         ).json()
         blob = " ".join(t["description"] for t in body["transactions"])
         assert _FAKE_ACCT not in blob
+
+
+# ---------------------------------------------------------------------------
+# TestCategoryOverride  (manual category correction + few-shot learning)
+# ---------------------------------------------------------------------------
+
+class TestCategoryOverride:
+    """POST /category-override sets a category and records a sanitised correction.
+
+    The app runs its Store connection in a worker thread, so the test uses its OWN
+    independent sqlite3 connection to the same tmp DB file (SQLITE_PATH) to inspect /
+    seed rows — never the app's connection (SQLite forbids cross-thread use).
+    """
+
+    @staticmethod
+    def _conn():
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _rows(self):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT id, txn_fingerprint, description, category "
+                "FROM transactions ORDER BY id"
+            ).fetchall()
+
+    def _find(self, desc_contains):
+        for r in self._rows():
+            if desc_contains in r["description"]:
+                return r
+        raise AssertionError(f"no synthetic txn matching {desc_contains!r}")
+
+    def _category_of(self, txn_id):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT category FROM transactions WHERE id = ?", (txn_id,)
+            ).fetchone()["category"]
+
+    def _corrections(self):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT cleaned_description, category FROM corrections"
+            ).fetchall()
+
+    def test_sets_category_and_records_correction(self, api_client):
+        _upload_both(api_client)
+        row = self._find("WOOLWORTHS METRO")
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Dining Out"}
+        )
+        assert resp.status_code == 200
+
+        assert self._category_of(row["id"]) == "Dining Out"
+        # 'WOOLWORTHS METRO' has no digits, so it scrubs to itself and is remembered.
+        corr = [(c["cleaned_description"], c["category"]) for c in self._corrections()]
+        assert ("WOOLWORTHS METRO", "Dining Out") in corr
+
+    def test_override_by_fingerprint(self, api_client):
+        _upload_both(api_client)
+        row = self._rows()[0]
+        resp = api_client.post(
+            "/category-override",
+            json={"fingerprint": row["txn_fingerprint"], "category": "Transport"},
+        )
+        assert resp.status_code == 200
+        assert self._category_of(row["id"]) == "Transport"
+
+    def test_unknown_category_400(self, api_client):
+        _upload_both(api_client)
+        row = self._rows()[0]
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Crypto"}
+        )
+        assert resp.status_code == 400
+        # No correction stored for a rejected category.
+        assert self._corrections() == []
+
+    def test_missing_transaction_404(self, api_client):
+        _upload_both(api_client)
+        resp = api_client.post(
+            "/category-override", json={"id": 999999, "category": "Transport"}
+        )
+        assert resp.status_code == 404
+
+    def test_id_or_fingerprint_required_400(self, api_client):
+        _upload_both(api_client)
+        resp = api_client.post("/category-override", json={"category": "Transport"})
+        assert resp.status_code == 400
+
+    def test_unsanitisable_description_sets_category_but_skips_correction(self, api_client):
+        _upload_both(api_client)
+        row = self._rows()[0]
+        # Replace the raw description with an all-digit string that scrubs to nothing
+        # safe (fail-closed): digits are stripped and the empty result is dropped.
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE transactions SET description = ? WHERE id = ?",
+                ("999999999999999", row["id"]),
+            )
+            conn.commit()
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Transport"}
+        )
+        assert resp.status_code == 200
+
+        assert self._category_of(row["id"]) == "Transport"
+        # Fail-closed: the un-sanitisable description is never stored for reuse.
+        assert self._corrections() == []

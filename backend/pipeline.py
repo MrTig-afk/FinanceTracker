@@ -297,7 +297,15 @@ def run_pipeline(
     # hints (local-only data — never transaction text) and prepend it to the
     # system prompt. The pipeline owns the Store, so it builds this here to keep
     # the analyser decoupled from Store (it only ever receives strings).
-    preamble = build_context_prompt(store.get_category_context())
+    #
+    # Few-shot learning: recent manual corrections (already sanitiser-scrubbed
+    # cleaned_description + category — never a raw description) are appended as
+    # "Examples of how the owner has corrected categories:" so future
+    # categorisation follows the owner's past overrides. user_prompt is unchanged.
+    preamble = build_context_prompt(
+        store.get_category_context(),
+        store.recent_corrections(),
+    )
 
     # categorise() short-circuits with zero HTTP calls when sresult.payload is empty.
     analysis = categorise(sresult, client=analyser_client, context_preamble=preamble)

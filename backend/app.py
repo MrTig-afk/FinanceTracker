@@ -11,6 +11,7 @@ GET  /trends    Per-category spending across a window of recent months
                 (?months=1-24, default 6; ?end=YYYY-MM, default latest month).
 GET  /category-context  The 9 canonical categories with stored hints (D1/D2).
 PUT  /category-context  Replace-all of the 9 canonical categories' hints.
+POST /category-override Override one transaction's category + remember the correction.
 POST /push/subscribe    Store a Web Push subscription locally (v2 Pass 3 scaffold).
 POST /push/unsubscribe  Remove a stored Web Push subscription by endpoint.
 
@@ -64,6 +65,12 @@ from backend.data_source import Bank
 from backend.drive_uploader import is_configured
 from backend.pipeline import RunReport, UploadedFile, run_pipeline
 from backend.store import Store, TAXONOMY
+
+# The pure scrub helpers are reused (not the full sanitise() batch path) to clean a
+# single raw description before it is stored as a reusable correction example. This
+# is the ONLY sanctioned way a description-derived string enters the corrections
+# table, and it fails closed: an un-sanitisable description is never stored.
+from backend.sanitiser.scrub import has_residual_identifier, scrub_description
 
 # ---------------------------------------------------------------------------
 # Bootstrap — load .env once at module import (config read, no network/DB/file-create)
@@ -138,6 +145,23 @@ class CategoryHintsIn(BaseModel):
 
 class CategoryContextIn(BaseModel):
     categories: list[CategoryHintsIn]
+
+
+# ---------------------------------------------------------------------------
+# Pydantic model — manual category override body
+# ---------------------------------------------------------------------------
+
+
+class CategoryOverrideIn(BaseModel):
+    """Override one transaction's category by row id OR transaction fingerprint.
+
+    Exactly one of id / fingerprint identifies the row; category must be a canonical
+    taxonomy label (validated in the handler, not here, so junk yields a clean 400).
+    """
+
+    id: int | None = None
+    fingerprint: str | None = Field(default=None, max_length=128)
+    category: str = Field(min_length=1, max_length=60)
 
 
 # ---------------------------------------------------------------------------
@@ -414,6 +438,62 @@ async def reclassify(
         store.revert_fuel_dining_rule(month)
 
     return store.summary(month)
+
+
+# ---------------------------------------------------------------------------
+# POST /category-override  (manual category correction + few-shot learning)
+# ---------------------------------------------------------------------------
+
+# Valid override targets are exactly the canonical taxonomy labels. 'Uncategorised'
+# (a NULL-category view label, not a real category) is intentionally excluded.
+_OVERRIDE_CATEGORIES: frozenset[str] = frozenset(TAXONOMY)
+
+
+@app.post("/category-override")
+async def category_override(body: CategoryOverrideIn):
+    """Override one transaction's category and remember the correction for few-shot reuse.
+
+    Body (JSON):
+        id           — row id (int), OR
+        fingerprint  — transaction fingerprint (str); exactly one is required.
+        category     — a canonical taxonomy label (400 on anything else).
+
+    Behaviour:
+      1. Reject a non-taxonomy category with 400 (junk never touches the store).
+      2. Set that transaction's category (local SQLite write only).
+      3. Look up the transaction's RAW description, scrub it through the sanitiser,
+         and record the (cleaned_description, category) correction so future runs get
+         it as a few-shot example. Fail-closed: if the description scrubs to nothing
+         safe, the category is still set but NO correction is stored — an
+         un-sanitisable string is never persisted or sent off-machine.
+
+    LOCAL-ONLY edit of the owner's own store — same local-serve posture as
+    /reclassify. Returns the updated month summary so the dashboard can re-render.
+    """
+    if body.category not in _OVERRIDE_CATEGORIES:
+        raise HTTPException(status_code=400, detail="unknown category")
+
+    if body.id is None and not body.fingerprint:
+        raise HTTPException(status_code=400, detail="id or fingerprint required")
+
+    key: int | str = body.id if body.id is not None else body.fingerprint  # type: ignore[assignment]
+
+    store = app.state.store
+
+    # Look up the raw description BEFORE writing so a missing row is a clean 404.
+    raw = store.transaction_description(key)
+    if raw is None:
+        raise HTTPException(status_code=404, detail="transaction not found")
+
+    # Set the category (local write only).
+    store.set_categories({key: body.category})
+
+    # Scrub the raw description and record the correction — fail-closed on residue.
+    cleaned = scrub_description(raw)
+    if not has_residual_identifier(cleaned):
+        store.record_correction(cleaned, body.category)
+
+    return store.summary()
 
 
 # ---------------------------------------------------------------------------
