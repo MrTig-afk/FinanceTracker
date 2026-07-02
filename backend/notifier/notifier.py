@@ -13,11 +13,13 @@ the default shipped state (PUSH_ENABLED unset, keys blank).
 
 Privacy — HARD rule
 --------------------
-The push payload is ALWAYS the fixed generic pair
-``{"title": NOTIFICATION_TITLE, "body": NOTIFICATION_BODY}``. It NEVER carries
-amounts, balances, descriptions, categories, counts, account info, or dates.
-Subscriptions are read from the local Store only; this module never reads raw
-transaction data.
+The push payload is a structured ``{"type", "title", "body"}`` object built by
+``build_notification`` from the fixed catalog. Copy is COUNTS + STATUS ONLY: it may
+name a count ("N transactions"), a bank ("CommBank"/"Westpac"), or a month
+("YYYY-MM") but NEVER amounts, balances, descriptions, categories, merchant/payee
+names, or account info. No emojis, no em dashes. The service worker routes on the
+``type`` field (in-app banner vs OS notification). Subscriptions are read from the
+local Store only; this module never reads raw transaction data.
 
 Activation (human-only; do NOT do this as part of the scaffold)
 -----------------------------------------------------------------
@@ -53,16 +55,108 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Fixed generic notification content — HARD rule, no financial data.
+# Notification content — HARD rule: COUNTS + STATUS ONLY.
 # ---------------------------------------------------------------------------
+# Every notification body carries only counts (N transactions) and status words
+# (which bank, which month) — NEVER amounts, balances, merchant/payee names,
+# descriptions, categories, account info, or dates beyond a "YYYY-MM" month tag.
+# No emojis, no em dashes (plain hyphens only). The service worker routes on the
+# structured `type` field (in-app banner vs OS notification); `title`/`body` are
+# the human-visible copy.
 
 NOTIFICATION_TITLE = "FinanceTracker"
+# Legacy generic body retained for backward reference; the live catalog below
+# supersedes it (send_processed_notification now emits a counted "processed" body).
 NOTIFICATION_BODY = "Your statement was processed"
+
+# The full notification catalog. Each entry is built into a structured payload
+# {"type", "title", "body"} by build_notification().
+NOTIFICATION_TYPES = (
+    "processed",
+    "processed_recovered",
+    "categorisation_failed",
+    "categorisation_recovered",
+    "parse_error",
+    "drive_backup_failed",
+    "duplicate_noop",
+    "generic_error",
+    "monthly_reminder",
+)
 
 _PLACEHOLDER_PUBLIC_KEY = "REPLACE_WITH_VAPID_PUBLIC_KEY"
 _PLACEHOLDER_PRIVATE_KEY = "REPLACE_WITH_VAPID_PRIVATE_KEY"
 
 _TRUTHY = {"1", "true", "yes", "on"}
+
+
+# ---------------------------------------------------------------------------
+# Payload catalog — builds the structured {type, title, body} the SW routes on.
+# ---------------------------------------------------------------------------
+
+
+def _count_str(count: int | None) -> str:
+    """Render a safe count string. None/invalid -> 'some' (never leaks anything)."""
+    if count is None:
+        return "some"
+    try:
+        return str(int(count))
+    except (TypeError, ValueError):
+        return "some"
+
+
+def build_notification(
+    ntype: str, *, count: int | None = None, detail: str | None = None
+) -> dict:
+    """Build the structured push payload for one catalog type.
+
+    Returns ``{"type": ntype, "title": str, "body": str}``. The body is COUNTS +
+    STATUS ONLY: it may name a count, a bank ("CommBank"/"Westpac"), or a month
+    ("YYYY-MM") but NEVER amounts, merchants, descriptions, categories, or names.
+
+    Raises ValueError for an unknown type (fail loud in code; callers in the
+    pipeline pass only known constants).
+    """
+    n = _count_str(count)
+
+    if ntype == "processed":
+        title = "Statements processed"
+        body = f"Statements processed - {n} transactions sorted."
+    elif ntype == "processed_recovered":
+        title = "Backend back online"
+        body = (
+            f"Backend back online - your queued upload is now processed "
+            f"({n} transactions)."
+        )
+    elif ntype == "categorisation_failed":
+        title = "Sorting delayed"
+        body = (
+            f"Sorting is delayed - {n} transactions are saved and waiting to be "
+            f"sorted. Open the app to retry."
+        )
+    elif ntype == "categorisation_recovered":
+        title = "Sorting caught up"
+        body = f"Sorting caught up - {n} transactions are now sorted."
+    elif ntype == "parse_error":
+        bank = detail or "a"
+        title = "Could not read a statement"
+        body = f"Could not read your {bank} statement - open the app to check."
+    elif ntype == "drive_backup_failed":
+        month = detail or "the latest month"
+        title = "Backup failed"
+        body = f"Backup to Drive failed for {month} - open the app to check."
+    elif ntype == "duplicate_noop":
+        title = "Nothing new"
+        body = "Nothing new to process - this upload was already handled."
+    elif ntype == "generic_error":
+        title = "Something went wrong"
+        body = "Something went wrong on the last run - open the app to check."
+    elif ntype == "monthly_reminder":
+        title = "New month"
+        body = "New month - time to export and upload this month's statements."
+    else:
+        raise ValueError(f"unknown notification type: {ntype!r}")
+
+    return {"type": ntype, "title": title, "body": body}
 
 
 # ---------------------------------------------------------------------------
@@ -133,20 +227,20 @@ def is_push_enabled(cfg: dict | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def send_processed_notification(store, *, config: dict | None = None) -> int:
-    """Best-effort generic 'processed' push to all stored subscriptions.
+def _deliver(store, payload: dict, config: dict | None) -> int:
+    """Fail-closed core send: encrypt-and-push ``payload`` to every stored sub.
 
     HARD NO-OP (returns 0, ZERO network calls, does NOT import pywebpush) when
     is_push_enabled() is False -- i.e. by default (PUSH_ENABLED unset) or when any
     VAPID key is missing/placeholder. This is the fail-closed default shipped state.
+    An empty subscription list is also a no-op (returns 0).
 
-    When enabled + real-keyed (future activation): lazy `from pywebpush import webpush,
-    WebPushException`, iterate store.list_push_subscriptions(), and for each send an
-    ENCRYPTED Web Push whose payload is ONLY the fixed generic
-    {"title": NOTIFICATION_TITLE, "body": NOTIFICATION_BODY} -- NEVER any transaction data.
-    vapid_private_key + vapid_claims{'sub': subject} from config. Each send wrapped in
-    try/except so one failed endpoint never aborts the loop; failures are logged as safe
-    counts only (never endpoint/key values). Returns the number of sends attempted.
+    When enabled + real-keyed (future activation): lazy import pywebpush, iterate
+    store.list_push_subscriptions(), and send an ENCRYPTED Web Push whose data is
+    ONLY the structured {type, title, body} ``payload`` -- counts/status only,
+    NEVER any transaction data. Each send is wrapped so one failed endpoint never
+    aborts the loop; failures are logged as safe counts only (never endpoint/key
+    values). Returns the number of sends attempted.
     """
     if config is None:
         config = push_config()
@@ -162,7 +256,7 @@ def send_processed_notification(store, *, config: dict | None = None) -> int:
     if not subscriptions:
         return 0
 
-    payload = json.dumps({"title": NOTIFICATION_TITLE, "body": NOTIFICATION_BODY})
+    data = json.dumps(payload)
     vapid_claims = {"sub": config["subject"]}
 
     attempted = 0
@@ -172,7 +266,7 @@ def send_processed_notification(store, *, config: dict | None = None) -> int:
         try:
             webpush(
                 subscription_info=sub,
-                data=payload,
+                data=data,
                 vapid_private_key=config["private_key"],
                 vapid_claims=dict(vapid_claims),
             )
@@ -182,6 +276,67 @@ def send_processed_notification(store, *, config: dict | None = None) -> int:
             failures += 1
 
     if failures:
-        logger.info("push notification: %d/%d sends failed", failures, attempted)
+        logger.info(
+            "push notification (%s): %d/%d sends failed",
+            payload.get("type", "?"),
+            failures,
+            attempted,
+        )
 
     return attempted
+
+
+def send_notification(
+    store,
+    ntype: str,
+    *,
+    count: int | None = None,
+    detail: str | None = None,
+    config: dict | None = None,
+) -> int:
+    """Build the ``ntype`` catalog payload and best-effort push it to all subs.
+
+    Per-type opt-out gate (Feature E): a HARD no-op (returns 0, no payload build,
+    no delivery) when the owner has disabled this notification type
+    (store.notification_enabled(ntype) is False). The default is enabled, so an
+    owner who never touched settings still gets everything. A settings-read failure
+    must never break a run, so any error reading the flag falls back to enabled (the
+    safe default) rather than silently dropping the notification.
+
+    Fail-closed: even when the type is enabled, delivery is still a hard no-op
+    (returns 0) unless push is enabled with real VAPID keys AND at least one
+    subscription exists. Never raises for a delivery/keying problem; only an unknown
+    ``ntype`` raises ValueError (programmer error).
+    """
+    try:
+        if store is not None and not store.notification_enabled(ntype):
+            return 0
+    except Exception:  # noqa: BLE001 — a settings read must never break delivery
+        pass
+    payload = build_notification(ntype, count=count, detail=detail)
+    return _deliver(store, payload, config)
+
+
+def send_processed_notification(
+    store,
+    *,
+    count: int | None = None,
+    recovered: bool = False,
+    config: dict | None = None,
+) -> int:
+    """Best-effort 'processed' (or 'processed_recovered') push to all subs.
+
+    ``recovered=True`` is used when a previously-queued upload is flushed after the
+    backend was offline. Fail-closed no-op posture is unchanged (see _deliver).
+    """
+    ntype = "processed_recovered" if recovered else "processed"
+    return send_notification(store, ntype, count=count, config=config)
+
+
+def send_monthly_reminder(store, *, config: dict | None = None) -> int:
+    """Best-effort 'new month, upload your statements' reminder to all subs.
+
+    Called by the always-on service (Task Scheduler) via POST /notify/monthly-reminder.
+    Fail-closed no-op posture is unchanged (see _deliver).
+    """
+    return send_notification(store, "monthly_reminder", config=config)

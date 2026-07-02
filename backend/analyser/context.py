@@ -15,8 +15,30 @@ from typing import Sequence
 
 from backend.store import CategoryContext
 
+# Header for the few-shot examples block appended when the owner has made manual
+# category corrections. Kept SEPARATE from the TAXONOMY & CONTEXT head so the
+# no-corrections output stays byte-identical to the JS mirror / golden fixture.
+_EXAMPLES_HEADER = "Examples of how the owner has corrected categories:"
 
-def build_context_prompt(categories: Sequence[CategoryContext]) -> str:
+
+def _corrections_block(recent_corrections: Sequence[tuple[str, str]]) -> str:
+    """Render recent corrections as a deterministic few-shot examples block, or ''.
+
+    Each correction becomes one 'cleaned_description -> Category' line, in the order
+    given (the store supplies them newest-first and already capped). Only the safe
+    cleaned_description and the category appear — never a raw description. Returns ''
+    when there are no corrections so the preamble is unchanged (back-compat).
+    """
+    if not recent_corrections:
+        return ""
+    lines = [f"{cleaned} -> {category}" for cleaned, category in recent_corrections]
+    return _EXAMPLES_HEADER + "\n" + "\n".join(lines)
+
+
+def build_context_prompt(
+    categories: Sequence[CategoryContext],
+    recent_corrections: Sequence[tuple[str, str]] = (),
+) -> str:
     """Return the TAXONOMY & CONTEXT preamble string. Byte-identical to the JS mirror.
 
     Header line, then the separator line, then a single '\\n', then the first
@@ -25,6 +47,14 @@ def build_context_prompt(categories: Sequence[CategoryContext]) -> str:
     is collapsed to single spaces and trimmed. Categories are joined by a blank
     line ('\\n\\n'). An empty name falls back to 'Untitled' (kept for parity with
     the mockup; with D1 the 9 canonical names are always present in production).
+
+    recent_corrections (few-shot learning): an optional sequence of
+    (cleaned_description, category) tuples (newest first, already capped by the
+    store). When non-empty, a short "Examples of how the owner has corrected
+    categories:" block of 'cleaned_description -> Category' lines is appended after
+    a blank line. When empty (the default), the output is byte-identical to the
+    previous single-argument behaviour, so the JS mirror and golden fixture still
+    hold. Only the cleaned_description + category travel — never a raw description.
     """
     head = [
         "TAXONOMY & CONTEXT",
@@ -36,4 +66,9 @@ def build_context_prompt(categories: Sequence[CategoryContext]) -> str:
         bodies.append(
             "- " + (cat.name or "Untitled") + "\n    " + (h if h else "(no extra context)")
         )
-    return "\n".join(head) + "\n" + "\n\n".join(bodies)
+    preamble = "\n".join(head) + "\n" + "\n\n".join(bodies)
+
+    block = _corrections_block(recent_corrections)
+    if block:
+        return preamble + "\n\n" + block
+    return preamble

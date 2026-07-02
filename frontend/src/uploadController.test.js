@@ -538,10 +538,17 @@ function xlsxFile(name = 'westpac.xlsx') {
   });
 }
 
-// The CSV read is async (FileReader/.text()); flush macrotasks so the preview
-// render has run.
-function flush() {
-  return new Promise((r) => setTimeout(r, 10));
+// The CSV read (file.text()) and the preview render are async. A single fixed
+// delay can lose the race under full-suite load (the render's macrotask lands
+// after the timer fires), which is what made this file flaky. Instead, drain the
+// microtask queue and yield the macrotask queue several times: any micro- or
+// macrotask-based work settles deterministically within these turns, regardless
+// of machine load.
+async function flush() {
+  for (let i = 0; i < 20; i += 1) {
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  }
 }
 
 describe('client-side CSV preview', () => {

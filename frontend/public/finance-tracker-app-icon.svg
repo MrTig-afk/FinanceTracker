@@ -1,6 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="FinanceTracker app icon">
   <title>FinanceTracker app icon</title>
-  <rect width="64" height="64" rx="15" fill="#171b26"></rect>
+  <!-- Background follows the browser/OS colour scheme: dark by default, white in
+       light mode. The coloured arcs read well on either, so only the plate flips. -->
+  <style>
+    .ft-plate { fill: #171b26; }
+    @media (prefers-color-scheme: light) {
+      .ft-plate { fill: #ffffff; }
+    }
+  </style>
+  <rect class="ft-plate" width="64" height="64" rx="15"></rect>
   <g fill="none" stroke-width="7" stroke-linecap="butt">
     <circle cx="32" cy="32" r="18" stroke="#57b26f" stroke-dasharray="14.45 98.7" transform="rotate(-83 32 32)"></circle>
     <circle cx="32" cy="32" r="18" stroke="#4a90d9" stroke-dasharray="14.45 98.7" transform="rotate(-23 32 32)"></circle>

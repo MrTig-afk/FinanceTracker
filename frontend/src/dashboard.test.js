@@ -428,6 +428,27 @@ describe('fuel-rule toggle state', () => {
     expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
   });
 
+  it('reflects fuel_rule_enabled (preference), even when no row was moved', () => {
+    // The user's case: preference on, but zero eligible under-$10 fuel rows, so
+    // fuel_rule_applied stays false. The toggle must still show ON.
+    dash.render({
+      ...SYNTHETIC_SUMMARY,
+      fuel_rule_enabled: true,
+      fuel_rule_applied: false,
+    });
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(true);
+  });
+
+  it('fuel_rule_enabled false keeps the toggle off regardless of applied', () => {
+    document.getElementById('fuel-rule-toggle').checked = true;
+    dash.render({
+      ...SYNTHETIC_SUMMARY,
+      fuel_rule_enabled: false,
+      fuel_rule_applied: true,
+    });
+    expect(document.getElementById('fuel-rule-toggle').checked).toBe(false);
+  });
+
   it('unchecks the toggle when fuel_rule_applied is absent', () => {
     document.getElementById('fuel-rule-toggle').checked = true;
     const { fuel_rule_applied, ...rest } = SYNTHETIC_SUMMARY;

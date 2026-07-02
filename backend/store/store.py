@@ -45,6 +45,9 @@ _FUEL_RULE_FLOOR = Decimal("-10.00")
 
 _TWO_DP = Decimal("0.01")
 
+# Tolerant truthy set for boolean app_settings values (case-insensitive, trimmed).
+_BOOL_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+
 
 def amount_to_text(amount: Decimal) -> str:
     """Canonical storage form: quantize to 2 dp, fold -0.00 -> 0.00, str().
@@ -417,6 +420,152 @@ class Store:
         )
         self.conn.commit()
         return cursor.rowcount
+
+    # ------------------------------------------------------------------
+    # Manual category corrections + few-shot learning (LOCAL-ONLY storage)
+    # ------------------------------------------------------------------
+
+    def record_correction(self, cleaned_description: str, category: str) -> None:
+        """Remember an owner category correction for reuse as a few-shot example.
+
+        `cleaned_description` MUST already be sanitiser-scrubbed by the caller — this
+        table stores ONLY the safe cleaned string, never the raw bank description. The
+        category is passed through coerce_category (unknown/None/'' -> 'Other') so a
+        junk label can never enter the store.
+
+        Dedupe/replace: keyed on the UNIQUE cleaned_description via INSERT ... ON
+        CONFLICT DO UPDATE, so re-correcting the same merchant keeps a single row with
+        its LATEST category and a refreshed created_at (which drives recency ordering).
+        LOCAL-ONLY: this method never sends anything off-machine.
+        """
+        self.conn.execute(
+            """
+            INSERT INTO corrections(cleaned_description, category, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(cleaned_description) DO UPDATE SET
+                category = excluded.category,
+                created_at = excluded.created_at
+            """,
+            (cleaned_description, coerce_category(category), _utc_now_iso()),
+        )
+        self.conn.commit()
+
+    def recent_corrections(self, limit: int = 20) -> list[tuple[str, str]]:
+        """Return the most recent (cleaned_description, category) corrections, newest first.
+
+        Ordered by created_at DESC, id DESC (a deterministic tie-break when two rows
+        share a timestamp). Capped at `limit` (most-recent 20 by default). Returns []
+        when there are no corrections. Feeds the analyser's few-shot examples block via
+        build_context_prompt — only the already-scrubbed cleaned_description leaves as
+        an example, never a raw description.
+        """
+        rows = self.conn.execute(
+            "SELECT cleaned_description, category FROM corrections "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [(row["cleaned_description"], row["category"]) for row in rows]
+
+    def transaction_description(self, key: str | int) -> str | None:
+        """Return the RAW description for a transaction by row id (int) or fingerprint (str).
+
+        RAW, LOCAL-ONLY: the returned string is the owner's own data and must never be
+        sent off-machine directly — the override endpoint scrubs it through the
+        sanitiser before it can become a stored/reused correction example. Returns None
+        when no row matches the key.
+        """
+        if isinstance(key, int):
+            row = self.conn.execute(
+                "SELECT description FROM transactions WHERE id = ?", (key,)
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT description FROM transactions WHERE txn_fingerprint = ?", (key,)
+            ).fetchone()
+        return row["description"] if row is not None else None
+
+    def list_corrections(self) -> list[dict]:
+        """Return all stored corrections newest-first for the settings/corrections UI.
+
+        Ordered by created_at DESC, id DESC (deterministic tie-break). Each dict is
+        {"id", "cleaned_description", "category", "created_at"}. LOCAL-ONLY: only the
+        already-scrubbed cleaned_description is stored here, never a raw description,
+        and this method never sends anything off-machine. Returns [] when empty.
+        """
+        rows = self.conn.execute(
+            "SELECT id, cleaned_description, category, created_at FROM corrections "
+            "ORDER BY created_at DESC, id DESC"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "cleaned_description": row["cleaned_description"],
+                "category": row["category"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def delete_correction(self, cid: int) -> int:
+        """Delete one correction by id; commits and returns rowcount (0 if absent).
+
+        Idempotent no-op safe. LOCAL-ONLY write; no network.
+        """
+        cursor = self.conn.execute("DELETE FROM corrections WHERE id = ?", (cid,))
+        self.conn.commit()
+        return cursor.rowcount
+
+    # ------------------------------------------------------------------
+    # App settings — key/value preferences store (LOCAL-ONLY, owner's device)
+    # ------------------------------------------------------------------
+
+    def get_setting(self, key: str) -> str | None:
+        """Return the stored TEXT value for `key`, or None when unset. No network."""
+        row = self.conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row is not None else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Upsert one setting (INSERT ... ON CONFLICT(key) DO UPDATE); commits.
+
+        LOCAL-ONLY: preferences live on the owner's own device and never leave it.
+        """
+        self.conn.execute(
+            """
+            INSERT INTO app_settings(key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, _utc_now_iso()),
+        )
+        self.conn.commit()
+
+    def get_bool_setting(self, key: str, default: bool) -> bool:
+        """Return a boolean setting; unset -> `default`.
+
+        Stored canonically as "1"/"0" by set_bool_setting, but this parse is tolerant:
+        {"1", "true", "yes", "on"} (case-insensitive, trimmed) are truthy; any other
+        stored value is falsey. No network.
+        """
+        value = self.get_setting(key)
+        if value is None:
+            return default
+        return value.strip().lower() in _BOOL_TRUTHY
+
+    def set_bool_setting(self, key: str, value: bool) -> None:
+        """Persist a boolean setting as canonical "1"/"0". Commits. LOCAL-ONLY."""
+        self.set_setting(key, "1" if value else "0")
+
+    def notification_enabled(self, ntype: str) -> bool:
+        """True when notifications of type `ntype` are enabled (DEFAULT True when unset).
+
+        Reads the per-type key `notify:<ntype>`. An owner who never touched settings
+        gets every notification (opt-out model). No network.
+        """
+        return self.get_bool_setting(f"notify:{ntype}", True)
 
     # ------------------------------------------------------------------
     # Layer 1: file fingerprints (FR-12)
@@ -837,6 +986,7 @@ class Store:
                 "net": "0.00",
                 "count": 0,
                 "fuel_rule_applied": False,
+                "fuel_rule_enabled": self.get_bool_setting("fuel_rule_enabled", False),
                 "fuel_rule_eligible": 0,
                 "fuel_rule_eligible_amount": "0.00",
                 "account_balances": {},
@@ -864,6 +1014,7 @@ class Store:
             "net": str(net),
             "count": len(rows),
             "fuel_rule_applied": self.fuel_rule_applied(year_month),
+            "fuel_rule_enabled": self.get_bool_setting("fuel_rule_enabled", False),
             "fuel_rule_eligible": count,
             "fuel_rule_eligible_amount": str(amt),
             "account_balances": self.account_balances(year_month),
@@ -925,7 +1076,7 @@ class Store:
                 "total": "-170.01",
                 "count": 1,
                 "transactions": [
-                    {"date": "YYYY-MM-DD", "description": "...",
+                    {"id": 12, "date": "YYYY-MM-DD", "description": "...",
                      "amount": "-170.01", "bank": "commbank"},
                     ...
                 ],
@@ -949,7 +1100,7 @@ class Store:
             where, params = "year_month = ? AND category = ?", (year_month, category)
 
         rows = self.conn.execute(
-            f"SELECT date, description, amount, bank FROM transactions WHERE {where}",
+            f"SELECT id, date, description, amount, bank FROM transactions WHERE {where}",
             params,
         ).fetchall()
 
@@ -968,6 +1119,7 @@ class Store:
             "count": len(rows),
             "transactions": [
                 {
+                    "id": r["id"],  # row id — lets the client target a category override
                     "date": r["date"],
                     "description": r["description"],
                     "amount": r["amount"],  # already canonical str(Decimal)
@@ -1226,3 +1378,72 @@ class Store:
             "spend_by_month": [str(v) for v in spend_by_month],
             "months_available": len(self.available_months()),
         }
+
+    # ------------------------------------------------------------------
+    # Data export + reset (LOCAL-ONLY; owner's own data / device maintenance)
+    # ------------------------------------------------------------------
+
+    def all_transactions_for_export(self) -> list[dict]:
+        """Return EVERY transaction as a dict, ordered by date then id, for CSV export.
+
+        LOCAL-ONLY: the RAW descriptions/amounts are the owner's own data, served
+        only to the owner's own client (and into a download the owner explicitly
+        requested). This method never sends anything off-machine. Money values are
+        the stored canonical str(Decimal), never float. category is None when a row
+        is still uncategorised. Returns [] when the database is empty.
+        """
+        rows = self.conn.execute(
+            "SELECT date, description, amount, category, bank, year_month "
+            "FROM transactions ORDER BY date, id"
+        ).fetchall()
+        return [
+            {
+                "date": row["date"],
+                "description": row["description"],
+                "amount": row["amount"],
+                "category": row["category"],
+                "bank": row["bank"],
+                "year_month": row["year_month"],
+            }
+            for row in rows
+        ]
+
+    def reset_all_data(self) -> dict:
+        """Wipe all transaction data and re-seed category_context to defaults.
+
+        DELETEs every row from transactions, file_fingerprints, and corrections, then
+        rebuilds category_context to the 8 canonical DEFAULT_CONTEXT rows. All in one
+        transaction; commits once. Deliberately PRESERVES push_subscription (the
+        device stays subscribed) and app_settings (owner preferences are kept).
+
+        LOCAL-ONLY destructive maintenance op; contains ZERO network code. Returns the
+        per-table deleted-row counts ``{"transactions": n, "file_fingerprints": n,
+        "corrections": n}`` captured BEFORE the delete.
+        """
+        counts = {
+            "transactions": self.conn.execute(
+                "SELECT COUNT(*) FROM transactions"
+            ).fetchone()[0],
+            "file_fingerprints": self.conn.execute(
+                "SELECT COUNT(*) FROM file_fingerprints"
+            ).fetchone()[0],
+            "corrections": self.conn.execute(
+                "SELECT COUNT(*) FROM corrections"
+            ).fetchone()[0],
+        }
+
+        self.conn.execute("DELETE FROM transactions")
+        self.conn.execute("DELETE FROM file_fingerprints")
+        self.conn.execute("DELETE FROM corrections")
+
+        # Re-seed category_context to the canonical defaults (same rows as the
+        # first-run seed / save_category_context replace-all).
+        now = _utc_now_iso()
+        self.conn.execute("DELETE FROM category_context")
+        self.conn.executemany(
+            "INSERT INTO category_context(name, color, hints, position, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(c.name, c.color, c.hints, c.position, now) for c in DEFAULT_CONTEXT],
+        )
+        self.conn.commit()
+        return counts

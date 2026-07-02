@@ -271,7 +271,13 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
   // fuelToast.js, wired in main.js) — not a rendered note here.
   function _syncFuelToggle(summary) {
     if (!fuelToggleEl) return;
-    fuelToggleEl.checked = Boolean(summary.fuel_rule_applied);
+    // Reflect the persisted preference (fuel_rule_enabled), NOT whether a row was
+    // actually moved (fuel_rule_applied) — otherwise the toggle snaps back to off
+    // whenever there are no eligible under-$10 fuel rows to reclassify. Fall back
+    // to fuel_rule_applied for older payloads that predate the preference field.
+    const on =
+      summary.fuel_rule_enabled ?? summary.fuel_rule_applied ?? false;
+    fuelToggleEl.checked = Boolean(on);
   }
 
   // -------------------------------------------------------------------------

@@ -6,6 +6,22 @@ fail-closed gate (is_push_enabled) and the activation notes.
 """
 from __future__ import annotations
 
-from .notifier import is_push_enabled, push_config, send_processed_notification
+from .notifier import (
+    NOTIFICATION_TYPES,
+    build_notification,
+    is_push_enabled,
+    push_config,
+    send_monthly_reminder,
+    send_notification,
+    send_processed_notification,
+)
 
-__all__ = ["send_processed_notification", "is_push_enabled", "push_config"]
+__all__ = [
+    "send_notification",
+    "send_processed_notification",
+    "send_monthly_reminder",
+    "build_notification",
+    "NOTIFICATION_TYPES",
+    "is_push_enabled",
+    "push_config",
+]

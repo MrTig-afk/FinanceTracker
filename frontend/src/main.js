@@ -17,7 +17,10 @@ import { createMonthly } from './monthlyController.js';
 import { createYearly } from './yearlyController.js';
 import { createTrends } from './trendsController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
+import { createSettings } from './settingsController.js';
 import { createPushController } from './push.js';
+import { createToast } from './toast.js';
+import { createNotificationBridge } from './notifications.js';
 import { createCategoryDrawer } from './categoryDrawer.js';
 import { createMobileNav } from './mobileNav.js';
 
@@ -54,7 +57,12 @@ if (import.meta.env.PROD) {
 
 document.addEventListener('DOMContentLoaded', () => {
   createMobileNav({ root: document });
-  const categoryDrawer = createCategoryDrawer({ root: document });
+  // onChanged fires after a manual category override; reuse load() so the
+  // Overview summary/donut (and mini-trend) re-render with the corrected totals.
+  const categoryDrawer = createCategoryDrawer({
+    root: document,
+    onChanged: () => load(),
+  });
   const dash = createDashboard(document, {
     onCategorySelect: (category, meta) => categoryDrawer.open(category, meta),
   });
@@ -126,6 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let monthly = null;
   let yearly = null;
   let trends = null;
+  let settings = null;
 
   const views = initViews({
     root: document,
@@ -146,9 +155,31 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (view === 'yearly') {
         if (!yearly) yearly = createYearly({ root: document });
         yearly.load();
+      } else if (view === 'settings') {
+        if (!settings) settings = createSettings({ root: document });
+        settings.load();
       }
+      // 'contact' is static — no controller needed.
     },
   });
+
+  // -------------------------------------------------------------------------
+  // Brand (logo + name) acts as a "home" button — clicking it returns to
+  // Overview. Keyboard-accessible (Enter/Space) since it is not a native link.
+  // -------------------------------------------------------------------------
+  const brand = document.querySelector('.sidebar-brand');
+  if (brand) {
+    brand.setAttribute('role', 'button');
+    brand.setAttribute('tabindex', '0');
+    brand.setAttribute('aria-label', 'Go to Overview');
+    brand.addEventListener('click', () => views.show('overview'));
+    brand.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        views.show('overview');
+      }
+    });
+  }
 
   // -------------------------------------------------------------------------
   // Upload queue (FR-4) — IndexedDB-backed with memory fallback.
@@ -175,6 +206,12 @@ document.addEventListener('DOMContentLoaded', () => {
     root: document,
     api: { subscribe: postPushSubscribe, unsubscribe: postPushUnsubscribe },
   });
+
+  // When the app is FOCUSED, the service worker relays push payloads to the page
+  // (instead of raising an OS notification); show them as an in-app toast. When
+  // backgrounded, the SW shows an OS notification instead and this never fires.
+  const notifyToast = createToast(document, { regionId: 'notify-toast-region' });
+  createNotificationBridge({ toast: notifyToast });
 
   // -------------------------------------------------------------------------
   // Manual refresh (FR-34 v1: no push — manual refresh button satisfies spec).

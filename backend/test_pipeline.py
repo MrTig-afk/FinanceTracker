@@ -1171,26 +1171,46 @@ class TestSplitwiseTagging:
 
 
 # ---------------------------------------------------------------------------
-# TestPushNotificationInvocation — v2 Pass 3 (inert scaffold)
+# TestPushNotificationInvocation — v4 Feature D (notification catalog + triggers)
 #
-# Asserts pipeline.py only calls send_processed_notification behind the flag
-# posture: a real (non-noop) run reaches the call site exactly once; a true
-# no-op run does not reach it at all. The notifier itself is a hard no-op by
-# default (see backend/notifier/test_notifier.py) — here we only verify the
-# CALL SITE behaviour and that pipeline never lets a notifier exception break
-# the run.
+# Asserts run_pipeline fires exactly the right catalog notification per outcome
+# (success / no-op / categorise failure / parse error / drive failure / recovery)
+# and that a notifier failure never breaks the run. The send path itself is a
+# hard fail-closed no-op by default (see backend/notifier/test_notifier.py); here
+# we monkeypatch pipeline.send_notification to capture (type, kwargs) per trigger.
 # ---------------------------------------------------------------------------
 
 import backend.pipeline as pipeline_module
 
+from backend.analyser import AnalyserError
+
+
+class _FailingAnalyserClient:
+    """Stand-in whose .complete() always raises AnalyserError (all tiers down)."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def complete(self, *, system_prompt: str, user_prompt: str):
+        self.call_count += 1
+        raise AnalyserError("synthetic: all model tiers failed")
+
+
+def _capture_notifications(monkeypatch):
+    """Patch pipeline.send_notification to record (type, kwargs); returns the list."""
+    calls: list[tuple[str, dict]] = []
+
+    def _fake(store, ntype, **kwargs):
+        calls.append((ntype, kwargs))
+        return 0
+
+    monkeypatch.setattr(pipeline_module, "send_notification", _fake)
+    return calls
+
 
 class TestPushNotificationInvocation:
-    def test_real_run_calls_notifier_exactly_once(self, tmp_path, monkeypatch):
-        calls = []
-        monkeypatch.setattr(
-            pipeline_module, "send_processed_notification", lambda store: calls.append(store) or 0
-        )
-
+    def test_successful_run_fires_processed(self, tmp_path, monkeypatch):
+        calls = _capture_notifications(monkeypatch)
         store = Store(":memory:")
         run_pipeline(
             _make_uploads(),
@@ -1203,14 +1223,27 @@ class TestPushNotificationInvocation:
         store.close()
 
         assert len(calls) == 1
+        ntype, kwargs = calls[0]
+        assert ntype == "processed"
+        assert kwargs.get("count") == 5  # 3 CommBank + 2 Westpac rows
 
-    def test_noop_run_does_not_call_notifier(self, tmp_path, monkeypatch):
-        """A truly-identical re-upload (noop path) never reaches the notifier call site."""
-        calls = []
-        monkeypatch.setattr(
-            pipeline_module, "send_processed_notification", lambda store: calls.append(store) or 0
+    def test_queued_upload_fires_processed_recovered(self, tmp_path, monkeypatch):
+        calls = _capture_notifications(monkeypatch)
+        store = Store(":memory:")
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+            was_queued=True,
         )
+        store.close()
 
+        assert [c[0] for c in calls] == ["processed_recovered"]
+
+    def test_noop_run_fires_duplicate_noop(self, tmp_path, monkeypatch):
         store = Store(":memory:")
         uploads = _make_uploads()
         run_pipeline(
@@ -1221,7 +1254,7 @@ class TestPushNotificationInvocation:
             output_dir=tmp_path,
             sanitise_log_dir=tmp_path,
         )
-        calls.clear()  # only care about the second (no-op) run
+        calls = _capture_notifications(monkeypatch)  # only watch the 2nd (no-op) run
 
         second = run_pipeline(
             uploads,
@@ -1234,7 +1267,125 @@ class TestPushNotificationInvocation:
         store.close()
 
         assert second.noop is True
-        assert len(calls) == 0
+        assert [c[0] for c in calls] == ["duplicate_noop"]
+
+    def test_categorise_failure_fires_categorisation_failed(self, tmp_path, monkeypatch):
+        calls = _capture_notifications(monkeypatch)
+        store = Store(":memory:")
+        report = run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=_FailingAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        # Run still returns a report (no propagation); rows saved as pending.
+        assert report.noop is False
+        assert len(calls) == 1
+        ntype, kwargs = calls[0]
+        assert ntype == "categorisation_failed"
+        assert kwargs.get("count", 0) >= 1
+
+    def test_parse_error_fires_parse_error_with_bank(self, tmp_path, monkeypatch):
+        calls = _capture_notifications(monkeypatch)
+        uploads = [
+            UploadedFile(filename="commbank.csv", bank=Bank.COMMBANK, content=_CB_BYTES),
+            UploadedFile(
+                filename="westpac.csv",
+                bank=Bank.WESTPAC,
+                content=b"this is not a bank statement at all\n",
+            ),
+        ]
+        store = Store(":memory:")
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert [c[0] for c in calls] == ["parse_error"]
+        assert calls[0][1].get("detail") == "Westpac"
+
+    def test_all_files_unparseable_fires_parse_error(self, tmp_path, monkeypatch):
+        calls = _capture_notifications(monkeypatch)
+        uploads = [
+            UploadedFile(
+                filename="commbank.csv",
+                bank=Bank.COMMBANK,
+                content=b"nonsense not a csv\n",
+            ),
+        ]
+        store = Store(":memory:")
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert [c[0] for c in calls] == ["parse_error"]
+        assert calls[0][1].get("detail") == "CommBank"
+
+    def test_drive_failure_fires_drive_backup_failed(self, tmp_path, monkeypatch):
+        calls = _capture_notifications(monkeypatch)
+
+        def _boom_upload(*args, **kwargs):
+            raise RuntimeError("synthetic drive/excel failure")
+
+        monkeypatch.setattr(pipeline_module, "upload_file", _boom_upload)
+
+        store = Store(":memory:")
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert [c[0] for c in calls] == ["drive_backup_failed"]
+        assert calls[0][1].get("detail")  # a "YYYY-MM" month string
+
+    def test_recovery_run_fires_categorisation_recovered(self, tmp_path, monkeypatch):
+        """First run fails categorisation (orphans); second run clears them."""
+        store = Store(":memory:")
+        uploads = _make_uploads()
+        # Run 1 — analyser down -> rows persisted as uncategorised orphans.
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=_FailingAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        assert len(store.uncategorised()) >= 1  # precondition: orphans exist
+
+        calls = _capture_notifications(monkeypatch)  # only watch the recovery run
+        # Run 2 — same files, analyser back up -> orphans recovered.
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=FakeAnalyserClient(),
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert [c[0] for c in calls] == ["categorisation_recovered"]
 
     def test_default_config_notifier_is_a_genuine_no_op_and_does_not_raise(self, tmp_path):
         """With the REAL notifier (no monkeypatch) and default env (unset), the
@@ -1256,10 +1407,10 @@ class TestPushNotificationInvocation:
     def test_notifier_exception_is_swallowed_run_report_still_returned(self, tmp_path, monkeypatch):
         """A raised exception inside the notifier must never fail the pipeline run."""
 
-        def _boom(store):
+        def _boom(store, ntype, **kwargs):
             raise RuntimeError("synthetic notifier failure")
 
-        monkeypatch.setattr(pipeline_module, "send_processed_notification", _boom)
+        monkeypatch.setattr(pipeline_module, "send_notification", _boom)
 
         store = Store(":memory:")
         report = run_pipeline(
@@ -1275,3 +1426,137 @@ class TestPushNotificationInvocation:
         assert report is not None
         assert report.noop is False
         assert report.new_txns == 5
+
+
+# ---------------------------------------------------------------------------
+# TestCorrectionsEnabledGateInjection — Feature E opt-in gate on few-shot examples
+#
+# corrections_enabled is OFF by default. When off, the pipeline injects ZERO
+# few-shot examples (the preamble is byte-identical to the no-corrections form).
+# When on, the owner's recorded corrections appear in the system prompt.
+# ---------------------------------------------------------------------------
+
+_EXAMPLES_HEADER = "Examples of how the owner has corrected categories:"
+
+
+class TestCorrectionsEnabledGateInjection:
+    def _run(self, store, fake, tmp_path):
+        run_pipeline(
+            _make_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+    def test_off_by_default_injects_no_examples(self, tmp_path):
+        store = Store(":memory:")
+        store.record_correction("SYNTH CORNER STORE", "Dining Out")
+        fake = FakeAnalyserClient()
+        self._run(store, fake, tmp_path)
+        store.close()
+
+        assert fake.received_system_prompts  # the analyser WAS called
+        for prompt in fake.received_system_prompts:
+            assert _EXAMPLES_HEADER not in prompt
+
+    def test_on_injects_recorded_examples(self, tmp_path):
+        store = Store(":memory:")
+        store.record_correction("SYNTH CORNER STORE", "Dining Out")
+        store.set_bool_setting("corrections_enabled", True)
+        fake = FakeAnalyserClient()
+        self._run(store, fake, tmp_path)
+        store.close()
+
+        assert any(
+            _EXAMPLES_HEADER in p and "SYNTH CORNER STORE -> Dining Out" in p
+            for p in fake.received_system_prompts
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestRetryUncategorised — orphan recovery without a re-upload (Feature E)
+# ---------------------------------------------------------------------------
+
+
+def _seed_uncat(store, rows):
+    """rows: (fp, date, description, amount, bank, year_month) — category NULL."""
+    store.conn.executemany(
+        "INSERT INTO transactions"
+        "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+        " VALUES (?,?,?,?,?,NULL,?,'t')",
+        rows,
+    )
+    store.conn.commit()
+
+
+class _RaisingAnalyserClient:
+    """Stand-in whose complete() always raises AnalyserError (OpenRouter down)."""
+
+    def complete(self, *, system_prompt, user_prompt):  # noqa: ARG002 — signature parity
+        raise AnalyserError("all model tiers failed")
+
+
+class TestRetryUncategorised:
+    def test_empty_is_noop_no_client_needed(self):
+        from backend.pipeline import retry_uncategorised
+
+        store = Store(":memory:")
+        try:
+            # No pending rows: returns immediately, no analyser construction/network.
+            assert retry_uncategorised(store) == {
+                "ok": True,
+                "categorised": 0,
+                "remaining": 0,
+            }
+        finally:
+            store.close()
+
+    def test_happy_path_categorises_orphans(self, tmp_path):
+        from backend.pipeline import retry_uncategorised
+
+        store = Store(":memory:")
+        _seed_uncat(store, [
+            ("rf1", "2026-06-01", "SYNTH GROCER", "-12.00", "commbank", "2026-06"),
+            ("rf2", "2026-06-02", "SYNTH DELI", "-3.50", "commbank", "2026-06"),
+        ])
+        fake = FakeAnalyserClient()
+        try:
+            out = retry_uncategorised(
+                store,
+                analyser_client=fake,
+                drive_service=None,
+                output_dir=tmp_path,
+                sanitise_log_dir=tmp_path,
+            )
+            assert out == {"ok": True, "categorised": 2, "remaining": 0}
+            assert store.uncategorised() == []
+        finally:
+            store.close()
+
+    def test_analyser_error_returns_safe_dict(self, tmp_path):
+        from backend.pipeline import retry_uncategorised
+
+        store = Store(":memory:")
+        _seed_uncat(store, [
+            ("rf1", "2026-06-01", "SYNTH GROCER", "-12.00", "commbank", "2026-06"),
+        ])
+        try:
+            out = retry_uncategorised(
+                store,
+                analyser_client=_RaisingAnalyserClient(),
+                drive_service=None,
+                output_dir=tmp_path,
+                sanitise_log_dir=tmp_path,
+            )
+            assert out == {
+                "ok": False,
+                "categorised": 0,
+                "remaining": 1,
+                "detail": "categoriser unavailable",
+            }
+            # Rows stay pending for a later recovery run.
+            assert len(store.uncategorised()) == 1
+        finally:
+            store.close()

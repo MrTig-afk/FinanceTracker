@@ -11,8 +11,21 @@ GET  /trends    Per-category spending across a window of recent months
                 (?months=1-24, default 6; ?end=YYYY-MM, default latest month).
 GET  /category-context  The 9 canonical categories with stored hints (D1/D2).
 PUT  /category-context  Replace-all of the 9 canonical categories' hints.
+POST /category-override Override one transaction's category + remember the correction.
 POST /push/subscribe    Store a Web Push subscription locally (v2 Pass 3 scaffold).
 POST /push/unsubscribe  Remove a stored Web Push subscription by endpoint.
+POST /notify/monthly-reminder  Fire the "new month, upload your statements" push
+                (for the always-on scheduler; fail-closed no-op when push is off).
+GET  /settings  Owner preferences: corrections_enabled (Feature B gate, default OFF)
+                + per-type notification toggles (default ON).
+PUT  /settings  Partial update of the above (unknown notification keys ignored).
+GET  /export/transactions.csv  Local CSV download of ALL transactions (owner's data).
+POST /reset     Wipe all transaction data (confirm=='RESET'); keep device + prefs.
+GET  /categoriser/status  configured bool + uncategorised_count (no network).
+POST /categoriser/test    Live minimal OpenRouter probe (no txn data; never raises).
+POST /categoriser/retry   Re-run categorisation over NULL-category rows (no re-upload).
+GET  /corrections         List stored corrections + Feature B enabled flag.
+DELETE /corrections/{cid} Remove one stored correction by id.
 
 Privacy contract
 ----------------
@@ -46,7 +59,9 @@ Effective CORS origins are logged at startup (origins only, never secrets).
 """
 from __future__ import annotations
 
+import csv
 import dataclasses
+import io
 import logging
 import os
 import re
@@ -56,14 +71,23 @@ from typing import Annotated
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from backend.analyser import AnalyserError, OpenRouterClient
 from backend.data_source import Bank
 from backend.drive_uploader import is_configured
-from backend.pipeline import RunReport, UploadedFile, run_pipeline
+from backend.notifier import NOTIFICATION_TYPES, send_monthly_reminder, send_notification
+from backend.pipeline import RunReport, UploadedFile, retry_uncategorised, run_pipeline
 from backend.store import Store, TAXONOMY
+
+# The pure scrub helpers are reused (not the full sanitise() batch path) to clean a
+# single raw description before it is stored as a reusable correction example. This
+# is the ONLY sanctioned way a description-derived string enters the corrections
+# table, and it fails closed: an un-sanitisable description is never stored.
+from backend.sanitiser.scrub import has_residual_identifier, scrub_description
 
 # ---------------------------------------------------------------------------
 # Bootstrap — load .env once at module import (config read, no network/DB/file-create)
@@ -121,7 +145,7 @@ app = FastAPI(lifespan=lifespan, title="FinanceTracker")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["GET", "POST", "PUT"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -138,6 +162,23 @@ class CategoryHintsIn(BaseModel):
 
 class CategoryContextIn(BaseModel):
     categories: list[CategoryHintsIn]
+
+
+# ---------------------------------------------------------------------------
+# Pydantic model — manual category override body
+# ---------------------------------------------------------------------------
+
+
+class CategoryOverrideIn(BaseModel):
+    """Override one transaction's category by row id OR transaction fingerprint.
+
+    Exactly one of id / fingerprint identifies the row; category must be a canonical
+    taxonomy label (validated in the handler, not here, so junk yields a clean 400).
+    """
+
+    id: int | None = None
+    fingerprint: str | None = Field(default=None, max_length=128)
+    category: str = Field(min_length=1, max_length=60)
 
 
 # ---------------------------------------------------------------------------
@@ -160,20 +201,71 @@ class PushUnsubscribeIn(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Pydantic models — settings (Feature E) and reset bodies
+# ---------------------------------------------------------------------------
+
+
+class SettingsIn(BaseModel):
+    """Partial settings update. Only provided (non-None) fields are applied.
+
+    corrections_enabled gates Feature B (manual-correction few-shot learning).
+    notifications maps a notification type -> enabled; unknown keys are ignored.
+    """
+
+    corrections_enabled: bool | None = None
+    notifications: dict[str, bool] | None = None
+
+
+class ResetIn(BaseModel):
+    """Destructive reset confirmation. The handler requires confirm == 'RESET'."""
+
+    confirm: str = Field(min_length=1, max_length=32)
+
+
+# ---------------------------------------------------------------------------
 # POST /upload  (FR-5)
 # ---------------------------------------------------------------------------
+
+# How much older than "now" a client-supplied queued_at must be for the upload to
+# count as "was queued while the backend was offline" (drives the processed vs
+# processed_recovered notification). A live upload sends queued_at ~= now (or none)
+# and stays under this threshold; a flushed offline-queue upload sits well above it.
+_QUEUED_DELAY_THRESHOLD_SECONDS = 120
+
+
+def _upload_was_queued(queued_at: str | None) -> bool:
+    """True when a client-supplied ISO8601 queued_at is meaningfully in the past.
+
+    Fail-safe: any missing/unparseable value -> False (treat as a live upload).
+    Never raises. Naive timestamps are assumed UTC.
+    """
+    if not queued_at:
+        return False
+    try:
+        parsed = datetime.fromisoformat(queued_at.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - parsed
+    return age.total_seconds() >= _QUEUED_DELAY_THRESHOLD_SECONDS
 
 
 @app.post("/upload")
 async def upload(
     commbank: Annotated[UploadFile | None, File()] = None,
     westpac: Annotated[UploadFile | None, File()] = None,
+    queued_at: Annotated[str | None, Form()] = None,
 ):
     """Accept CommBank and/or Westpac CSV files and run the full pipeline.
 
     Multipart form fields:
         commbank   — optional; CommBank NetBank CSV
         westpac    — optional; Westpac CSV
+        queued_at  — optional ISO8601 timestamp the client stamped when it CREATED
+                     the upload. If the request only reaches the backend well after
+                     that (the client queued it while the backend was offline), the
+                     run reports processed_recovered instead of the live processed.
 
     At least one non-empty field is required (400 otherwise).
 
@@ -208,10 +300,20 @@ async def upload(
         raise HTTPException(status_code=400, detail="no files uploaded")
 
     try:
-        report = run_pipeline(uploads, store=app.state.store)
+        report = run_pipeline(
+            uploads,
+            store=app.state.store,
+            was_queued=_upload_was_queued(queued_at),
+        )
     except Exception:
         # Unexpected crash — log it server-side but return a safe generic message.
         logger.exception("run_pipeline raised an unexpected exception")
+        # Best-effort catch-all push (no internal detail). Fail-closed + guarded so
+        # a notifier problem never masks the original 500.
+        try:
+            send_notification(app.state.store, "generic_error")
+        except Exception:  # noqa: BLE001
+            logger.debug("generic_error notification skipped")
         raise HTTPException(status_code=500, detail="internal error")
 
     # Persist last run info for /status.
@@ -408,12 +510,78 @@ async def reclassify(
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
 
     store = app.state.store
+    # Persist the toggle as a preference so it stays where the owner left it,
+    # even when there are no eligible (under-$10 fuel) rows to actually move this
+    # month. The toggle reflects this preference, not whether any row was moved.
+    store.set_bool_setting("fuel_rule_enabled", enabled)
     if enabled:
         store.apply_fuel_dining_rule(month)
     else:
         store.revert_fuel_dining_rule(month)
 
     return store.summary(month)
+
+
+# ---------------------------------------------------------------------------
+# POST /category-override  (manual category correction + few-shot learning)
+# ---------------------------------------------------------------------------
+
+# Valid override targets are exactly the canonical taxonomy labels. 'Uncategorised'
+# (a NULL-category view label, not a real category) is intentionally excluded.
+_OVERRIDE_CATEGORIES: frozenset[str] = frozenset(TAXONOMY)
+
+
+@app.post("/category-override")
+async def category_override(body: CategoryOverrideIn):
+    """Override one transaction's category and remember the correction for few-shot reuse.
+
+    Body (JSON):
+        id           — row id (int), OR
+        fingerprint  — transaction fingerprint (str); exactly one is required.
+        category     — a canonical taxonomy label (400 on anything else).
+
+    Behaviour:
+      1. Reject a non-taxonomy category with 400 (junk never touches the store).
+      2. Set that transaction's category (local SQLite write only).
+      3. Look up the transaction's RAW description, scrub it through the sanitiser,
+         and record the (cleaned_description, category) correction so future runs get
+         it as a few-shot example. This recording is GATED by the opt-in
+         ``corrections_enabled`` setting (default OFF, Feature E): when off, the
+         category override still applies but NO correction is recorded. Fail-closed:
+         even when on, if the description scrubs to nothing safe the category is still
+         set but NO correction is stored — an un-sanitisable string is never persisted
+         or sent off-machine.
+
+    LOCAL-ONLY edit of the owner's own store — same local-serve posture as
+    /reclassify. Returns the updated month summary so the dashboard can re-render.
+    """
+    if body.category not in _OVERRIDE_CATEGORIES:
+        raise HTTPException(status_code=400, detail="unknown category")
+
+    if body.id is None and not body.fingerprint:
+        raise HTTPException(status_code=400, detail="id or fingerprint required")
+
+    key: int | str = body.id if body.id is not None else body.fingerprint  # type: ignore[assignment]
+
+    store = app.state.store
+
+    # Look up the raw description BEFORE writing so a missing row is a clean 404.
+    raw = store.transaction_description(key)
+    if raw is None:
+        raise HTTPException(status_code=404, detail="transaction not found")
+
+    # Set the category (local write only).
+    store.set_categories({key: body.category})
+
+    # Scrub the raw description and record the correction — but ONLY when the owner
+    # has opted in (corrections_enabled, default OFF) AND it scrubs to something safe
+    # (fail-closed on residue). Both conditions must hold before anything is stored.
+    if store.get_bool_setting("corrections_enabled", False):
+        cleaned = scrub_description(raw)
+        if not has_residual_identifier(cleaned):
+            store.record_correction(cleaned, body.category)
+
+    return store.summary()
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +644,263 @@ async def push_subscribe(body: PushSubscriptionIn):
 async def push_unsubscribe(body: PushUnsubscribeIn):
     """Remove a stored subscription by endpoint. No-op safe. Returns {"ok": True, "removed": n}."""
     removed = app.state.store.delete_push_subscription(body.endpoint)
+    return {"ok": True, "removed": removed}
+
+
+# ---------------------------------------------------------------------------
+# POST /notify/monthly-reminder  (v4 Feature D — "new month, upload" nudge)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/notify/monthly-reminder")
+async def notify_monthly_reminder():
+    """Send the monthly "export and upload this month's statements" reminder.
+
+    Intended for the always-on service to hit on a schedule (e.g. Windows Task
+    Scheduler on the 1st of each month). Enabling that schedule is a separate OPS
+    step; this endpoint just performs one best-effort send when called.
+
+    Fail-closed: with push disabled / placeholder VAPID keys / no subscriptions,
+    this is a silent no-op that returns {"ok": True, "sent": 0}. Never raises for a
+    delivery problem. Carries NO transaction data (fixed status copy only).
+    """
+    sent = send_monthly_reminder(app.state.store)
+    return {"ok": True, "sent": sent}
+
+
+# ---------------------------------------------------------------------------
+# GET/PUT /settings  (Feature E — owner preferences: corrections + notifications)
+# ---------------------------------------------------------------------------
+
+
+def _settings_response() -> dict:
+    """Serialise current owner settings in the GET/PUT /settings response shape.
+
+    corrections_enabled defaults to False (Feature B is opt-in). Each notification
+    type defaults to True (opt-out model). LOCAL-ONLY read of the owner's own store.
+    """
+    store = app.state.store
+    return {
+        "corrections_enabled": store.get_bool_setting("corrections_enabled", False),
+        "notifications": {
+            ntype: store.notification_enabled(ntype) for ntype in NOTIFICATION_TYPES
+        },
+    }
+
+
+@app.get("/settings")
+async def get_settings():
+    """Return the owner's preferences (Feature B gate + per-type notification toggles).
+
+    Local serve to the owner's own client — same posture as /summary. No secrets.
+    """
+    return _settings_response()
+
+
+@app.put("/settings")
+async def put_settings(body: SettingsIn):
+    """Apply a PARTIAL settings update; return the full settings in the GET shape.
+
+    Only provided (non-None) fields are written. For ``notifications``, only keys in
+    NOTIFICATION_TYPES are accepted (unknown keys are ignored silently). Preferences
+    persist in local SQLite only — no off-machine call.
+    """
+    store = app.state.store
+    if body.corrections_enabled is not None:
+        store.set_bool_setting("corrections_enabled", body.corrections_enabled)
+    if body.notifications is not None:
+        for ntype, enabled in body.notifications.items():
+            if ntype in NOTIFICATION_TYPES:
+                store.set_bool_setting(f"notify:{ntype}", bool(enabled))
+    return _settings_response()
+
+
+# ---------------------------------------------------------------------------
+# GET /export/transactions.csv  (Feature E — local CSV download of all rows)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/export/transactions.csv")
+async def export_transactions_csv():
+    """Download ALL transactions as a CSV file (LOCAL serve of the owner's own data).
+
+    Columns: date, description, amount, category, bank, year_month; ordered by date
+    then id. The CSV is built in-memory with the stdlib csv module (RFC-4180 quoting),
+    so descriptions containing commas/quotes are escaped correctly. This is the owner's
+    own data served to the owner's own client into a download they explicitly
+    requested; nothing here is ever sent off-machine. Money values are the stored
+    canonical str(Decimal), never float.
+    """
+    rows = app.state.store.all_transactions_for_export()
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["date", "description", "amount", "category", "bank", "year_month"])
+    for r in rows:
+        writer.writerow(
+            [
+                r["date"],
+                r["description"],
+                r["amount"],
+                r["category"] if r["category"] is not None else "",
+                r["bank"],
+                r["year_month"],
+            ]
+        )
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="financetracker-transactions.csv"'
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /reset  (Feature E — wipe all transaction data; keep device + prefs)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/reset")
+async def reset(body: ResetIn):
+    """Wipe all transaction data after an explicit confirmation.
+
+    Body (JSON): ``{"confirm": "RESET"}`` — anything else is a 400. On confirmation,
+    DELETEs transactions/file_fingerprints/corrections and re-seeds category_context
+    to defaults, while PRESERVING push_subscription (device stays subscribed) and
+    app_settings (preferences kept). LOCAL-ONLY destructive op; no off-machine call.
+    Returns ``{"ok": True, "cleared": {"transactions": n, ...}}``.
+    """
+    if body.confirm != "RESET":
+        raise HTTPException(status_code=400, detail="confirmation required")
+
+    cleared = app.state.store.reset_all_data()
+    return {"ok": True, "cleared": cleared}
+
+
+# ---------------------------------------------------------------------------
+# Categoriser health — GET /categoriser/status, POST /categoriser/test|retry
+# ---------------------------------------------------------------------------
+
+
+def _probe_openrouter(client_factory=OpenRouterClient) -> dict:
+    """Owner-initiated LIVE connectivity probe for OpenRouter. Never raises.
+
+    Carries NO transaction data — a minimal fixed "ping" call only. The sole
+    sanctioned off-machine endpoint. ``client_factory`` is injectable so tests can
+    supply a fake client and never touch the network.
+
+    Returns a dict with ``configured``/``reachable``/``rate_limited``/``detail``:
+      - key unset:      configured False, no call attempted.
+      - success:        reachable True.
+      - AnalyserError naming 429 / "rate": rate_limited True (shared free-tier).
+      - any other error: reachable False (safe generic detail; never echoes the
+        raw exception text or the API key).
+    """
+    if not os.getenv("OPENROUTER_API_KEY"):
+        return {
+            "configured": False,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "OpenRouter API key not configured",
+        }
+
+    try:
+        client = client_factory()
+        client.complete(system_prompt="ping", user_prompt="ping")
+    except AnalyserError as exc:
+        message = str(exc).lower()
+        if "429" in message or "rate" in message:
+            return {
+                "configured": True,
+                "reachable": True,
+                "rate_limited": True,
+                "detail": "Rate limited (shared free-tier throttling)",
+            }
+        return {
+            "configured": True,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "Could not reach OpenRouter",
+        }
+    except Exception:  # noqa: BLE001 — never leak internal detail; safe generic string
+        return {
+            "configured": True,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "Could not reach OpenRouter",
+        }
+
+    return {
+        "configured": True,
+        "reachable": True,
+        "rate_limited": False,
+        "detail": "OpenRouter reachable",
+    }
+
+
+@app.get("/categoriser/status")
+async def categoriser_status():
+    """Report categoriser configuration + pending workload. NO network call.
+
+    ``configured`` is a boolean only (never the key value). ``uncategorised_count``
+    is how many rows still need a category (drives the app's "retry" affordance).
+    """
+    return {
+        "configured": bool(os.getenv("OPENROUTER_API_KEY")),
+        "uncategorised_count": len(app.state.store.uncategorised()),
+    }
+
+
+@app.post("/categoriser/test")
+async def categoriser_test():
+    """Owner-initiated LIVE OpenRouter connectivity probe (see _probe_openrouter).
+
+    Carries NO transaction data (a fixed "ping" only). Never raises; returns a safe
+    status dict. When the key is unset, no call is attempted.
+    """
+    return _probe_openrouter()
+
+
+@app.post("/categoriser/retry")
+async def categoriser_retry():
+    """Re-run categorisation over NULL-category rows WITHOUT a re-upload.
+
+    Ties into the pipeline's orphan-recovery path (retry_uncategorised): reuses the
+    exact sanitise -> gated few-shot preamble -> categorise -> set_categories ->
+    rebuild-workbooks path. Never raises: on OpenRouter being down it returns a safe
+    ``{"ok": False, ..., "detail": "categoriser unavailable"}`` with HTTP 200.
+    """
+    return retry_uncategorised(app.state.store)
+
+
+# ---------------------------------------------------------------------------
+# Learned corrections — GET /corrections, DELETE /corrections/{cid}  (Feature E)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/corrections")
+async def get_corrections():
+    """List the owner's stored category corrections + the Feature B enabled flag.
+
+    LOCAL serve of the owner's own store. Only the already-scrubbed
+    cleaned_description is stored/returned here, never a raw bank description.
+    """
+    store = app.state.store
+    return {
+        "enabled": store.get_bool_setting("corrections_enabled", False),
+        "corrections": store.list_corrections(),
+    }
+
+
+@app.delete("/corrections/{cid}")
+async def delete_correction(cid: int):
+    """Delete one stored correction by id. Idempotent no-op safe.
+
+    Returns ``{"ok": True, "removed": n}`` (n is 0 when the id was not present).
+    """
+    removed = app.state.store.delete_correction(cid)
     return {"ok": True, "removed": removed}
 
 

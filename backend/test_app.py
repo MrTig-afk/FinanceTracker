@@ -8,6 +8,7 @@ Drive unconfigured. DB in tmp_path sqlite.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 
 import pytest
@@ -985,6 +986,70 @@ class TestPushEndpoints:
 
 
 # ---------------------------------------------------------------------------
+# TestMonthlyReminderEndpoint — POST /notify/monthly-reminder (v4 Feature D)
+#
+# Fail-closed: with push disabled (default env) this is a silent no-op that
+# returns sent=0 and never raises. No off-machine call is made.
+# ---------------------------------------------------------------------------
+
+
+class TestMonthlyReminderEndpoint:
+    def test_returns_ok_and_zero_when_push_disabled(self, api_client):
+        r = api_client.post("/notify/monthly-reminder")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "sent": 0}
+
+    def test_no_op_even_with_a_subscription_stored(self, api_client):
+        # A stored subscription must still be a no-op while push stays disabled.
+        api_client.post("/push/subscribe", json=_SYNTH_SUBSCRIBE_BODY)
+        r = api_client.post("/notify/monthly-reminder")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "sent": 0}
+
+    def test_never_leaks_a_stacktrace(self, api_client):
+        r = api_client.post("/notify/monthly-reminder")
+        assert "Traceback" not in r.text
+
+
+# ---------------------------------------------------------------------------
+# TestUploadWasQueued — processed-vs-recovered decision helper (v4 Feature D)
+# ---------------------------------------------------------------------------
+
+
+class TestUploadWasQueued:
+    """_upload_was_queued(): a stale client queued_at => processed_recovered."""
+
+    def test_none_is_live(self):
+        assert app_module._upload_was_queued(None) is False
+
+    def test_blank_is_live(self):
+        assert app_module._upload_was_queued("") is False
+
+    def test_unparseable_is_live(self):
+        assert app_module._upload_was_queued("not-a-timestamp") is False
+
+    def test_recent_timestamp_is_live(self):
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        assert app_module._upload_was_queued(now) is False
+
+    def test_old_timestamp_is_queued(self):
+        from datetime import datetime, timedelta, timezone
+
+        stale = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        assert app_module._upload_was_queued(stale) is True
+
+    def test_old_zulu_timestamp_is_queued(self):
+        from datetime import datetime, timedelta, timezone
+
+        stale = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(
+            microsecond=0, tzinfo=None
+        ).isoformat() + "Z"
+        assert app_module._upload_was_queued(stale) is True
+
+
+# ---------------------------------------------------------------------------
 # TestCategoryTransactionsEndpoint — GET /category-transactions (drill-down)
 # ---------------------------------------------------------------------------
 
@@ -1005,13 +1070,14 @@ class TestCategoryTransactionsEndpoint:
         assert body["count"] == 5
         assert len(body["transactions"]) == 5
 
-    def test_each_txn_has_only_the_four_view_fields(self, api_client):
+    def test_each_txn_has_only_the_five_view_fields(self, api_client):
         _upload_both(api_client)
         body = api_client.get(
             "/category-transactions", params={"category": "Groceries"}
         ).json()
         for t in body["transactions"]:
-            assert set(t.keys()) == {"date", "description", "amount", "bank"}
+            assert set(t.keys()) == {"id", "date", "description", "amount", "bank"}
+            assert isinstance(t["id"], int)
 
     def test_sorted_by_magnitude_desc(self, api_client):
         _upload_both(api_client)
@@ -1057,3 +1123,538 @@ class TestCategoryTransactionsEndpoint:
         ).json()
         blob = " ".join(t["description"] for t in body["transactions"])
         assert _FAKE_ACCT not in blob
+
+
+# ---------------------------------------------------------------------------
+# TestCategoryOverride  (manual category correction + few-shot learning)
+# ---------------------------------------------------------------------------
+
+class TestCategoryOverride:
+    """POST /category-override sets a category and records a sanitised correction.
+
+    The app runs its Store connection in a worker thread, so the test uses its OWN
+    independent sqlite3 connection to the same tmp DB file (SQLITE_PATH) to inspect /
+    seed rows — never the app's connection (SQLite forbids cross-thread use).
+    """
+
+    @staticmethod
+    def _conn():
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _rows(self):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT id, txn_fingerprint, description, category "
+                "FROM transactions ORDER BY id"
+            ).fetchall()
+
+    def _find(self, desc_contains):
+        for r in self._rows():
+            if desc_contains in r["description"]:
+                return r
+        raise AssertionError(f"no synthetic txn matching {desc_contains!r}")
+
+    def _category_of(self, txn_id):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT category FROM transactions WHERE id = ?", (txn_id,)
+            ).fetchone()["category"]
+
+    def _corrections(self):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT cleaned_description, category FROM corrections"
+            ).fetchall()
+
+    def test_sets_category_and_records_correction(self, api_client):
+        _upload_both(api_client)
+        # Feature B (correction recording) is opt-in and OFF by default — enable it
+        # first so the override records a reusable correction.
+        api_client.put("/settings", json={"corrections_enabled": True})
+        row = self._find("WOOLWORTHS METRO")
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Dining Out"}
+        )
+        assert resp.status_code == 200
+
+        assert self._category_of(row["id"]) == "Dining Out"
+        # 'WOOLWORTHS METRO' has no digits, so it scrubs to itself and is remembered.
+        corr = [(c["cleaned_description"], c["category"]) for c in self._corrections()]
+        assert ("WOOLWORTHS METRO", "Dining Out") in corr
+
+    def test_override_by_fingerprint(self, api_client):
+        _upload_both(api_client)
+        row = self._rows()[0]
+        resp = api_client.post(
+            "/category-override",
+            json={"fingerprint": row["txn_fingerprint"], "category": "Transport"},
+        )
+        assert resp.status_code == 200
+        assert self._category_of(row["id"]) == "Transport"
+
+    def test_unknown_category_400(self, api_client):
+        _upload_both(api_client)
+        row = self._rows()[0]
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Crypto"}
+        )
+        assert resp.status_code == 400
+        # No correction stored for a rejected category.
+        assert self._corrections() == []
+
+    def test_missing_transaction_404(self, api_client):
+        _upload_both(api_client)
+        resp = api_client.post(
+            "/category-override", json={"id": 999999, "category": "Transport"}
+        )
+        assert resp.status_code == 404
+
+    def test_id_or_fingerprint_required_400(self, api_client):
+        _upload_both(api_client)
+        resp = api_client.post("/category-override", json={"category": "Transport"})
+        assert resp.status_code == 400
+
+    def test_unsanitisable_description_sets_category_but_skips_correction(self, api_client):
+        _upload_both(api_client)
+        row = self._rows()[0]
+        # Replace the raw description with an all-digit string that scrubs to nothing
+        # safe (fail-closed): digits are stripped and the empty result is dropped.
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE transactions SET description = ? WHERE id = ?",
+                ("999999999999999", row["id"]),
+            )
+            conn.commit()
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Transport"}
+        )
+        assert resp.status_code == 200
+
+        assert self._category_of(row["id"]) == "Transport"
+        # Fail-closed: the un-sanitisable description is never stored for reuse.
+        assert self._corrections() == []
+
+
+# ---------------------------------------------------------------------------
+# TestSettingsEndpoints — GET/PUT /settings (Feature E)
+# ---------------------------------------------------------------------------
+
+
+class TestSettingsEndpoints:
+    def test_get_defaults(self, api_client):
+        from backend.notifier import NOTIFICATION_TYPES
+
+        body = api_client.get("/settings").json()
+        assert body["corrections_enabled"] is False
+        assert set(body["notifications"].keys()) == set(NOTIFICATION_TYPES)
+        # Opt-out model: every notification type defaults to enabled.
+        assert all(v is True for v in body["notifications"].values())
+
+    def test_put_partial_corrections_only(self, api_client):
+        r = api_client.put("/settings", json={"corrections_enabled": True})
+        assert r.status_code == 200
+        assert r.json()["corrections_enabled"] is True
+        # Notifications untouched -> still all enabled.
+        assert all(r.json()["notifications"].values())
+
+    def test_put_partial_notification_persists(self, api_client):
+        api_client.put("/settings", json={"notifications": {"processed": False}})
+        body = api_client.get("/settings").json()
+        assert body["notifications"]["processed"] is False
+        assert body["notifications"]["parse_error"] is True
+        # corrections_enabled untouched -> still the default False.
+        assert body["corrections_enabled"] is False
+
+    def test_put_unknown_notification_key_ignored(self, api_client):
+        r = api_client.put(
+            "/settings", json={"notifications": {"not_a_real_type": False}}
+        )
+        assert r.status_code == 200
+        assert "not_a_real_type" not in r.json()["notifications"]
+
+    def test_put_empty_body_is_noop(self, api_client):
+        api_client.put("/settings", json={"corrections_enabled": True})
+        r = api_client.put("/settings", json={})
+        assert r.status_code == 200
+        # Nothing provided -> previously-set value is preserved.
+        assert r.json()["corrections_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# TestCorrectionsGateAndEndpoints — Feature B opt-in gate + GET/DELETE /corrections
+# ---------------------------------------------------------------------------
+
+
+class TestCorrectionsGateAndEndpoints:
+    @staticmethod
+    def _conn():
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _first_row(self):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT id, description FROM transactions ORDER BY id"
+            ).fetchone()
+
+    def _category_of(self, txn_id):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT category FROM transactions WHERE id = ?", (txn_id,)
+            ).fetchone()["category"]
+
+    def test_gate_off_sets_category_but_records_no_correction(self, api_client):
+        _upload_both(api_client)  # gate is OFF by default
+        row = self._first_row()
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Dining Out"}
+        )
+        assert resp.status_code == 200
+        # Override still applies...
+        assert self._category_of(row["id"]) == "Dining Out"
+        # ...but NO correction is recorded while the gate is off.
+        assert api_client.get("/corrections").json()["corrections"] == []
+
+    def test_gate_on_records_correction(self, api_client):
+        api_client.put("/settings", json={"corrections_enabled": True})
+        _upload_both(api_client)
+        row = self._first_row()
+
+        api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Dining Out"}
+        )
+        corrections = api_client.get("/corrections").json()["corrections"]
+        assert len(corrections) == 1
+        assert corrections[0]["category"] == "Dining Out"
+
+    def test_get_corrections_shape(self, api_client):
+        body = api_client.get("/corrections").json()
+        assert body["enabled"] is False
+        assert body["corrections"] == []
+
+    def test_delete_correction_removes_one(self, api_client):
+        api_client.put("/settings", json={"corrections_enabled": True})
+        _upload_both(api_client)
+        row = self._first_row()
+        api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Transport"}
+        )
+        cid = api_client.get("/corrections").json()["corrections"][0]["id"]
+
+        r = api_client.delete(f"/corrections/{cid}")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "removed": 1}
+        assert api_client.get("/corrections").json()["corrections"] == []
+
+    def test_delete_missing_correction_removed_zero(self, api_client):
+        r = api_client.delete("/corrections/999999")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "removed": 0}
+
+
+# ---------------------------------------------------------------------------
+# TestExportCsv — GET /export/transactions.csv (Feature E, LOCAL download)
+# ---------------------------------------------------------------------------
+
+
+class TestExportCsv:
+    def test_headers_and_rows(self, api_client):
+        import csv
+        import io
+
+        _upload_both(api_client)
+        r = api_client.get("/export/transactions.csv")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert (
+            r.headers["content-disposition"]
+            == 'attachment; filename="financetracker-transactions.csv"'
+        )
+
+        rows = list(csv.reader(io.StringIO(r.text)))
+        assert rows[0] == [
+            "date", "description", "amount", "category", "bank", "year_month",
+        ]
+        # 5 synthetic transactions -> 5 data rows after the header.
+        assert len(rows) == 1 + 5
+
+    def test_empty_db_has_header_only(self, api_client):
+        import csv
+        import io
+
+        r = api_client.get("/export/transactions.csv")
+        assert r.status_code == 200
+        rows = list(csv.reader(io.StringIO(r.text)))
+        assert len(rows) == 1  # header only
+
+    def test_commas_in_description_are_quoted(self, api_client):
+        import csv
+        import io
+
+        # Seed a description containing a comma via a separate connection.
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.execute(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES (?,?,?,?,?,?,?,'t')",
+            ("ecf1", "2026-06-01", "SYNTH SHOP, INC", "-5.00", "commbank", "Groceries", "2026-06"),
+        )
+        conn.commit()
+        conn.close()
+
+        r = api_client.get("/export/transactions.csv")
+        rows = list(csv.reader(io.StringIO(r.text)))
+        descriptions = [row[1] for row in rows[1:]]
+        # csv module round-trips the embedded comma correctly (proper quoting).
+        assert "SYNTH SHOP, INC" in descriptions
+
+
+# ---------------------------------------------------------------------------
+# TestResetEndpoint — POST /reset (Feature E)
+# ---------------------------------------------------------------------------
+
+
+class TestResetEndpoint:
+    @staticmethod
+    def _count(table):
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        (n,) = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+        conn.close()
+        return n
+
+    def test_wrong_confirm_400(self, api_client):
+        _upload_both(api_client)
+        r = api_client.post("/reset", json={"confirm": "nope"})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "confirmation required"
+        # Data untouched.
+        assert self._count("transactions") == 5
+
+    def test_confirm_wipes_and_returns_counts(self, api_client):
+        _upload_both(api_client)
+        r = api_client.post("/reset", json={"confirm": "RESET"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["cleared"]["transactions"] == 5
+        assert body["cleared"]["file_fingerprints"] == 2
+
+        assert self._count("transactions") == 0
+        assert self._count("file_fingerprints") == 0
+        assert self._count("corrections") == 0
+        # category_context re-seeded to the 8 canonical rows.
+        assert self._count("category_context") == 8
+
+    def test_missing_confirm_422(self, api_client):
+        r = api_client.post("/reset", json={})
+        assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# TestCategoriserEndpoints — status / test / retry (Feature E)
+# ---------------------------------------------------------------------------
+
+
+class TestCategoriserEndpoints:
+    def test_status_configured_false_and_zero_uncategorised(self, api_client):
+        r = api_client.get("/categoriser/status")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["configured"] is False  # OPENROUTER_API_KEY blanked in fixture
+        assert body["uncategorised_count"] == 0
+
+    def test_status_counts_uncategorised(self, api_client):
+        # Seed two NULL-category rows via a separate connection.
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.executemany(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES (?,?,?,?,?,NULL,?,'t')",
+            [
+                ("uf1", "2026-06-01", "SYNTH A", "-1.00", "commbank", "2026-06"),
+                ("uf2", "2026-06-02", "SYNTH B", "-2.00", "commbank", "2026-06"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        body = api_client.get("/categoriser/status").json()
+        assert body["uncategorised_count"] == 2
+
+    def test_test_endpoint_configured_off(self, api_client):
+        r = api_client.post("/categoriser/test")
+        assert r.status_code == 200
+        assert r.json() == {
+            "configured": False,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "OpenRouter API key not configured",
+        }
+
+    def test_retry_empty_is_noop(self, api_client):
+        r = api_client.post("/categoriser/retry")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "categorised": 0, "remaining": 0}
+
+    def test_retry_categorises_orphans(
+        self, api_client, fake_analyser, tmp_path, monkeypatch
+    ):
+        from backend.pipeline import retry_uncategorised as _real_retry
+
+        # Seed NULL-category rows via a separate connection.
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.executemany(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES (?,?,?,?,?,NULL,?,'t')",
+            [
+                ("uf1", "2026-06-01", "SYNTH A", "-1.00", "commbank", "2026-06"),
+                ("uf2", "2026-06-02", "SYNTH B", "-2.00", "commbank", "2026-06"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        # Inject the fake analyser + tmp output dirs (mirrors the run_pipeline patch).
+        def _patched(store):
+            return _real_retry(
+                store,
+                analyser_client=fake_analyser,
+                drive_service=None,
+                output_dir=str(tmp_path),
+                sanitise_log_dir=str(tmp_path),
+            )
+
+        monkeypatch.setattr(app_module, "retry_uncategorised", _patched)
+
+        r = api_client.post("/categoriser/retry")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "categorised": 2, "remaining": 0}
+
+    def test_retry_analyser_down_returns_safe_dict(
+        self, api_client, tmp_path, monkeypatch
+    ):
+        from backend.analyser import AnalyserError
+        from backend.pipeline import retry_uncategorised as _real_retry
+
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.execute(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES ('uf1','2026-06-01','SYNTH A','-1.00','commbank',NULL,'2026-06','t')",
+        )
+        conn.commit()
+        conn.close()
+
+        class _Raising:
+            def complete(self, *, system_prompt, user_prompt):  # noqa: ARG002
+                raise AnalyserError("all model tiers failed")
+
+        def _patched(store):
+            return _real_retry(
+                store,
+                analyser_client=_Raising(),
+                drive_service=None,
+                output_dir=str(tmp_path),
+                sanitise_log_dir=str(tmp_path),
+            )
+
+        monkeypatch.setattr(app_module, "retry_uncategorised", _patched)
+
+        r = api_client.post("/categoriser/retry")
+        assert r.status_code == 200
+        assert r.json() == {
+            "ok": False,
+            "categorised": 0,
+            "remaining": 1,
+            "detail": "categoriser unavailable",
+        }
+
+
+# ---------------------------------------------------------------------------
+# TestProbeOpenrouter — _probe_openrouter branches (unit, no network)
+# ---------------------------------------------------------------------------
+
+
+class _FakeProbeClient:
+    """Fake OpenRouterClient for the probe: optionally raises on complete()."""
+
+    def __init__(self, exc=None):
+        self._exc = exc
+
+    def complete(self, *, system_prompt, user_prompt):  # noqa: ARG002
+        if self._exc is not None:
+            raise self._exc
+        return ({"categories": {}}, "fake-model")
+
+
+class TestProbeOpenrouter:
+    def test_configured_off_never_calls_factory(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "")
+
+        def _boom():
+            raise AssertionError("factory must not be called when key is unset")
+
+        result = app_module._probe_openrouter(client_factory=_boom)
+        assert result == {
+            "configured": False,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "OpenRouter API key not configured",
+        }
+
+    def test_success_branch(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "SYNTH-KEY")
+        result = app_module._probe_openrouter(
+            client_factory=lambda: _FakeProbeClient()
+        )
+        assert result == {
+            "configured": True,
+            "reachable": True,
+            "rate_limited": False,
+            "detail": "OpenRouter reachable",
+        }
+
+    def test_rate_limited_branch(self, monkeypatch):
+        from backend.analyser import AnalyserError
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "SYNTH-KEY")
+        result = app_module._probe_openrouter(
+            client_factory=lambda: _FakeProbeClient(
+                exc=AnalyserError("HTTP 429 rate limited")
+            )
+        )
+        assert result["reachable"] is True
+        assert result["rate_limited"] is True
+        assert result["detail"] == "Rate limited (shared free-tier throttling)"
+
+    def test_generic_analyser_error_branch(self, monkeypatch):
+        from backend.analyser import AnalyserError
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "SYNTH-KEY")
+        result = app_module._probe_openrouter(
+            client_factory=lambda: _FakeProbeClient(
+                exc=AnalyserError("all model tiers failed")
+            )
+        )
+        assert result == {
+            "configured": True,
+            "reachable": False,
+            "rate_limited": False,
+            "detail": "Could not reach OpenRouter",
+        }
+
+    def test_unexpected_exception_branch(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "SYNTH-KEY")
+        result = app_module._probe_openrouter(
+            client_factory=lambda: _FakeProbeClient(exc=RuntimeError("boom"))
+        )
+        assert result["reachable"] is False
+        assert result["rate_limited"] is False
+        assert result["detail"] == "Could not reach OpenRouter"

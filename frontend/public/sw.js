@@ -144,23 +144,75 @@ self.addEventListener('fetch', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Web Push (v2 Pass 3). Independent of routing/caching above.
-// PRIVACY: never render server-sent payload text — show FIXED generic strings only,
-// so no financial data can ever appear in a notification. Mirrors src/swPush.js
-// (kept in sync manually, same convention as routeRequest above).
+// Web Push. Independent of routing/caching above.
+// Focus-aware routing: if a window client is FOCUSED/visible, relay the payload
+// to it via postMessage (the page shows an in-app toast) and DO NOT raise an OS
+// notification; otherwise show an OS notification. This logic mirrors the pure,
+// unit-tested copy in src/swPush.js (routePush / normalizePushPayload / etc),
+// kept in sync manually — same convention as routeRequest above.
+//
+// PRIVACY: server-sent title/body is COUNTS/STATUS-ONLY copy (guaranteed by the
+// backend notifier — never amounts, balances, descriptions, categories, or
+// accounts). Missing/malformed fields fall back to the fixed generic strings.
 // ---------------------------------------------------------------------------
 const PUSH_TITLE = 'FinanceTracker';
 const PUSH_BODY = 'Your statement was processed';
+const PUSH_MESSAGE_SOURCE = 'financetracker-push';
+
+function normalizePushPayload(raw) {
+  const obj = raw && typeof raw === 'object' ? raw : {};
+  const type = typeof obj.type === 'string' && obj.type ? obj.type : 'generic';
+  const title =
+    typeof obj.title === 'string' && obj.title.trim() ? obj.title : PUSH_TITLE;
+  const body = typeof obj.body === 'string' && obj.body ? obj.body : PUSH_BODY;
+  return { type, title, body };
+}
+
+function isClientFocused(client) {
+  if (!client) return false;
+  return client.focused === true || client.visibilityState === 'visible';
+}
 
 self.addEventListener('push', (event) => {
-  // Deliberately ignore event.data — content is always the fixed generic string.
+  let raw = null;
+  if (event.data) {
+    try {
+      raw = event.data.json();
+    } catch {
+      try {
+        raw = { body: event.data.text() };
+      } catch {
+        raw = null;
+      }
+    }
+  }
+  const p = normalizePushPayload(raw);
+
   event.waitUntil(
-    self.registration.showNotification(PUSH_TITLE, {
-      body: PUSH_BODY,
-      icon: '/icon.svg',
-      badge: '/icon.svg',
-      tag: 'financetracker-processed',
-    }),
+    self.clients
+      .matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clientList) => {
+        const focused = clientList.filter(isClientFocused);
+        if (focused.length > 0) {
+          // App is in the foreground: hand off to the page for an in-app toast.
+          const message = {
+            source: PUSH_MESSAGE_SOURCE,
+            type: p.type,
+            title: p.title,
+            body: p.body,
+          };
+          for (const client of focused) client.postMessage(message);
+          return undefined;
+        }
+        // Backgrounded: raise an OS notification.
+        return self.registration.showNotification(p.title, {
+          body: p.body,
+          icon: '/icon.svg',
+          badge: '/icon.svg',
+          tag: `financetracker-${p.type}`,
+          data: { type: p.type, title: p.title, body: p.body },
+        });
+      }),
   );
 });
 

@@ -54,12 +54,12 @@
           <a href="#" class="nav-item" data-view="context">
             <span class="nav-dot"></span>Category context
           </a>
-          <span class="nav-item nav-item--inert">
-            <span class="nav-dot"></span>History
-          </span>
-          <span class="nav-item nav-item--inert">
+          <a href="#" class="nav-item" data-view="contact">
+            <span class="nav-dot"></span>Contact
+          </a>
+          <a href="#" class="nav-item" data-view="settings">
             <span class="nav-dot"></span>Settings
-          </span>
+          </a>
         </nav>
 
         <div id="sidebar-month" class="sidebar-info"></div>
@@ -480,6 +480,157 @@
                   <div class="trends-legend-list" id="trends-legend"></div>
                   <div class="trends-legend-foot">Latest month shown. Hover to spotlight; click a category to hide it, click again to restore.</div>
                 </div>
+              </div>
+            </section>
+          </section>
+
+          <!-- Settings view (Feature E) -->
+          <section class="view" data-view="settings" hidden>
+            <div class="settings-grid">
+              <!-- Notifications -->
+              <section class="card settings-card">
+                <h2 class="card-title">Notifications</h2>
+                <p class="card-sub">Choose which events raise a notification on this device.</p>
+                <div id="settings-notifications" class="settings-toggle-list"></div>
+                <p id="settings-notifications-status" class="settings-status" role="status" aria-live="polite"></p>
+                <p class="settings-hint">
+                  Enabling notifications on this device is handled on the
+                  <a href="#" class="settings-link" data-view="upload">Upload</a> tab.
+                </p>
+              </section>
+
+              <!-- Categoriser health -->
+              <section class="card settings-card">
+                <h2 class="card-title">Categoriser health</h2>
+                <p class="card-sub">Check the OpenRouter connection and re-sort anything left over.</p>
+                <p id="settings-categoriser-summary" class="settings-summary">Loading...</p>
+                <div class="settings-btn-row">
+                  <button id="settings-categoriser-test" type="button" class="settings-secondary-btn">
+                    Test OpenRouter
+                  </button>
+                  <p id="settings-categoriser-test-status" class="settings-status" role="status" aria-live="polite"></p>
+                </div>
+                <div class="settings-btn-row">
+                  <button id="settings-categoriser-retry" type="button" class="settings-secondary-btn">
+                    Retry uncategorised
+                  </button>
+                  <p id="settings-categoriser-retry-status" class="settings-status" role="status" aria-live="polite"></p>
+                </div>
+              </section>
+
+              <!-- Learned corrections -->
+              <section class="card settings-card">
+                <h2 class="card-title">Learned corrections</h2>
+                <p class="card-sub">Optional. The app can remember how you re-sort merchants.</p>
+                <div class="settings-toggle-row settings-corrections-optin">
+                  <span class="settings-toggle-label">
+                    Let the app learn from my category corrections (off by default)
+                  </span>
+                  <label class="fuel-switch">
+                    <input id="settings-corrections-toggle" type="checkbox"
+                           aria-label="Let the app learn from my category corrections" />
+                    <span class="fuel-switch-track"><span class="knob"></span></span>
+                  </label>
+                </div>
+                <p class="settings-note">
+                  When this is off, corrections are neither recorded nor used.
+                </p>
+                <div id="settings-corrections-list" class="settings-corrections-list"></div>
+                <p id="settings-corrections-status" class="settings-status" role="status" aria-live="polite"></p>
+              </section>
+
+              <!-- Data & backup -->
+              <section class="card settings-card">
+                <h2 class="card-title">Data &amp; backup</h2>
+                <p class="card-sub">Export a copy of everything, or wipe the database.</p>
+                <a id="settings-backup-link" class="upload-btn settings-download-btn" href="#" download>
+                  Download backup (CSV)
+                </a>
+
+                <div class="settings-danger danger">
+                  <h3 class="settings-danger-title">Danger zone</h3>
+                  <p class="settings-danger-desc">
+                    This permanently deletes all stored transactions and settings on this
+                    machine. Type <strong>RESET</strong> to confirm.
+                  </p>
+                  <div class="settings-reset-row">
+                    <label class="settings-reset-label" for="settings-reset-input">Confirm</label>
+                    <input id="settings-reset-input" type="text" class="settings-reset-input"
+                           placeholder="RESET" autocomplete="off" spellcheck="false" />
+                    <button id="settings-reset-btn" type="button" class="settings-reset-btn" disabled>
+                      Reset all data
+                    </button>
+                  </div>
+                  <p id="settings-reset-status" class="settings-status" role="status" aria-live="polite"></p>
+                </div>
+              </section>
+
+              <!-- About & Privacy -->
+              <section class="card settings-card">
+                <h2 class="card-title">About &amp; privacy</h2>
+                <p class="settings-about">
+                  Your data stays on this machine. The only external call is to OpenRouter for
+                  categorisation, and it only ever receives the sanitised row index, cleaned
+                  description, and amount - never account numbers, balances, or names.
+                </p>
+                <p class="settings-about">
+                  <a class="settings-link" href="https://github.com/MrTig-afk/FinanceTracker"
+                     target="_blank" rel="noopener noreferrer">Source code on GitHub</a>
+                </p>
+                <p class="settings-version">FinanceTracker v0.1.0</p>
+              </section>
+            </div>
+          </section>
+
+          <!-- Contact view -->
+          <section class="view" data-view="contact" hidden>
+            <section class="card settings-card contact-card">
+              <div class="contact-icons">
+                <a class="contact-icon" href="mailto:kaushiknaru2002@gmail.com"
+                   aria-label="Email" title="Email">
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2 4h20a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm10 8.5L3 6.8V19h18V6.8l-9 5.7zM3.4 5l8.6 5.4L20.6 5H3.4z"/></svg>
+                </a>
+                <a class="contact-icon" href="https://github.com/MrTig-afk"
+                   target="_blank" rel="noopener noreferrer" aria-label="GitHub" title="GitHub">
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.29-.01-1.04-.02-2.05-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.31 3.5 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.49 5.92.43.37.81 1.1.81 2.22 0 1.61-.01 2.9-.01 3.29 0 .32.22.7.83.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+                </a>
+                <a class="contact-icon" href="https://www.linkedin.com/in/kaushikn2002"
+                   target="_blank" rel="noopener noreferrer" aria-label="LinkedIn" title="LinkedIn">
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.45 20.45h-3.56v-5.57c0-1.33-.03-3.04-1.85-3.04-1.86 0-2.14 1.45-2.14 2.94v5.67H9.35V9h3.41v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.13 2.07 2.07 0 0 1 0 4.13zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.22.79 24 1.77 24h20.45c.98 0 1.78-.78 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/></svg>
+                </a>
+                <a class="contact-icon" href="https://medium.com/@kaushiknaru2002"
+                   target="_blank" rel="noopener noreferrer" aria-label="Medium" title="Medium">
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.54 12a6.8 6.8 0 0 1-6.77 6.82A6.8 6.8 0 0 1 0 12a6.8 6.8 0 0 1 6.77-6.82A6.8 6.8 0 0 1 13.54 12zM20.96 12c0 3.54-1.51 6.42-3.38 6.42-1.87 0-3.39-2.88-3.39-6.42s1.52-6.42 3.39-6.42S20.96 8.46 20.96 12zM24 12c0 3.17-.53 5.75-1.19 5.75-.66 0-1.19-2.58-1.19-5.75s.53-5.75 1.19-5.75C23.47 6.25 24 8.83 24 12z"/></svg>
+                </a>
+              </div>
+
+              <div class="contact-about">
+                <h3 class="contact-about-title">About this project</h3>
+                <p class="contact-about-text">
+                  I am a <strong>master's student</strong>, and this whole thing started with a
+                  simple refusal: I did <em>not</em> want to pay for yet another budgeting app
+                  just to see where my own money goes each month!
+                </p>
+                <p class="contact-about-text">
+                  The easy answer was to make it <em>automatic</em>. Link every account, let some
+                  service pull the data, forget about it. But the more I sat with that, the
+                  clearer the trade-off got: <strong>automatic meant handing my entire financial
+                  history to a company I would simply have to trust</strong>. Hard pass!
+                </p>
+                <p class="contact-about-text">
+                  So I built the <em>opposite</em>. FinanceTracker reads the CSV exports I
+                  download myself, sorts them into categories, and keeps
+                  <strong>every single figure on my own machine</strong>. The only thing that
+                  ever leaves is a cleaned, anonymised description used for categorisation, and
+                  even that is <em>stripped of anything identifying</em> before it goes.
+                </p>
+                <p class="contact-about-text">
+                  It is a deliberate trade: a little less convenience for
+                  <strong>full control over my own data</strong>. It is <em>open source</em>, so
+                  anyone can run their own copy or read exactly what it does. And I am
+                  <strong>open to work and collaboration</strong>, so if any of this resonates,
+                  the links above will reach me!
+                </p>
               </div>
             </section>
           </section>

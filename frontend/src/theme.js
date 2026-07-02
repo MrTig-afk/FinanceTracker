@@ -40,6 +40,46 @@ export const THEME_TOKENS = {
 /** localStorage key used to persist the chosen theme across sessions. */
 export const STORAGE_KEY = 'ft_theme';
 
+/** Plate (background) colour of the tab favicon, per theme. */
+const FAVICON_PLATE = { light: '#ffffff', dark: '#171b26' };
+
+/**
+ * Build a data-URI SVG favicon whose plate matches the given theme (dark plate
+ * in dark mode, white plate in light mode). The coloured donut arcs are identical
+ * to /finance-tracker-app-icon.svg; only the plate flips. Pure — no DOM, no IO.
+ * @param {'light'|'dark'} theme
+ * @returns {string} a `data:image/svg+xml,...` URI
+ */
+export function faviconDataUri(theme) {
+  const plate = FAVICON_PLATE[theme] ?? FAVICON_PLATE.light;
+  const arc = (stroke, deg) =>
+    `<circle cx="32" cy="32" r="18" stroke="${stroke}" stroke-dasharray="14.45 98.7" transform="rotate(${deg} 32 32)"/>`;
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
+    `<rect width="64" height="64" rx="15" fill="${plate}"/>` +
+    '<g fill="none" stroke-width="7" stroke-linecap="butt">' +
+    arc('#57b26f', -83) +
+    arc('#4a90d9', -23) +
+    arc('#9b6cd4', 37) +
+    arc('#e0913f', 97) +
+    arc('#34a7a3', 157) +
+    arc('#d96ba6', 217) +
+    '</g></svg>';
+  return 'data:image/svg+xml,' + encodeURIComponent(svg);
+}
+
+/**
+ * Point the tab's <link rel="icon"> at a theme-matched favicon. No-op (never
+ * throws) when there is no icon link. Called from applyTheme so the tab icon
+ * tracks the in-app light/dark toggle, not just the OS colour scheme.
+ * @param {'light'|'dark'} theme
+ * @param {Document} doc
+ */
+export function applyFavicon(theme, doc = document) {
+  const link = doc && doc.querySelector ? doc.querySelector('link[rel="icon"]') : null;
+  if (link) link.setAttribute('href', faviconDataUri(theme));
+}
+
 /**
  * Read the stored theme. Returns 'light' when unset, invalid, or when
  * localStorage throws (private browsing, disabled storage, etc.) — never throws.
@@ -104,6 +144,9 @@ export function applyTheme(theme, root = document.documentElement) {
   root.style.setProperty('--inputbg', tokens.inputbg);
   root.style.setProperty('--card-shadow', tokens.cardShadow);
   root.style.setProperty('--accent', ACCENT);
+
+  // Keep the browser-tab favicon in sync with the in-app theme.
+  applyFavicon(theme, doc);
 
   const label = doc.getElementById ? doc.getElementById('theme-label') : null;
   if (label) label.textContent = isDark ? 'Dark' : 'Light';

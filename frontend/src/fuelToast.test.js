@@ -84,6 +84,17 @@ describe('show()', () => {
     expect(text).not.toContain('1 small servo purchases');
   });
 
+  it('ON with zero eligible: standby copy, never "0 moved"', () => {
+    toast.show(true, { count: 0, amount: '0.00' });
+    const el = document.querySelector('.toast');
+    expect(el.classList.contains('toast--off')).toBe(false);
+    expect(el.querySelector('.toast-title').textContent).toContain('Fuel-stop rule on');
+    const text = el.querySelector('.toast-text').textContent;
+    expect(text).toContain('No small fuel stops this month yet');
+    expect(text).not.toContain('moved to Dining Out');
+    expect(text).not.toContain('0 small servo');
+  });
+
   it('keeps only one toast at a time (replaces the current one)', () => {
     toast.show(true, { count: 3, amount: '-24.10' });
     toast.show(false, { count: 3, amount: '-24.10' });
