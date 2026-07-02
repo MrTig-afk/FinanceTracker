@@ -18,6 +18,7 @@ import { createTrends } from './trendsController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
 import { createPushController } from './push.js';
 import { createCategoryDrawer } from './categoryDrawer.js';
+import { createMobileNav } from './mobileNav.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -51,6 +52,7 @@ if (import.meta.env.PROD) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  createMobileNav({ root: document });
   const categoryDrawer = createCategoryDrawer({ root: document });
   const dash = createDashboard(document, {
     onCategorySelect: (category, meta) => categoryDrawer.open(category, meta),

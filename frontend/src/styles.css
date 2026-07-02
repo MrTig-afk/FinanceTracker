@@ -1226,6 +1226,42 @@ a.nav-item {
   max-width: 100%;
 }
 
+/* ── Mobile nav: hamburger toggle + slide-in drawer backdrop ─ */
+.nav-toggle {
+  display: none; /* desktop: hidden. Shown in the <=720px query below. */
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  flex: none;
+}
+
+.nav-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.nav-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 55;
+}
+
+.nav-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* ── Small screens: collapse the sidebar to a top bar ────── */
 @media (max-width: 720px) {
   #app {
@@ -1242,8 +1278,30 @@ a.nav-item {
     padding: 14px 18px;
   }
 
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  /* The nav becomes an off-canvas drawer that slides in from the left. It
+     keeps the base .sidebar-nav flex-column + gap; only positioning changes. */
   .sidebar-nav {
-    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: min(80vw, 300px);
+    box-sizing: border-box;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    padding: 18px 14px;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+    overflow-y: auto;
+  }
+
+  .sidebar-nav.is-open {
+    transform: translateX(0);
   }
 
   .sidebar-info {
@@ -1254,6 +1312,13 @@ a.nav-item {
   .site-header,
   .main-content {
     padding: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-nav,
+  .nav-backdrop {
+    transition-duration: 0.01ms;
   }
 }
 

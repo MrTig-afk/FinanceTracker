@@ -21,6 +21,13 @@
   <body>
     <div id="app">
       <aside class="sidebar">
+        <button id="nav-toggle" class="nav-toggle" type="button"
+                aria-label="Open menu" aria-expanded="false" aria-controls="sidebar-nav">
+          <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
+            <path d="M3 6h16M3 11h16M3 16h16" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" fill="none" />
+          </svg>
+        </button>
         <div class="sidebar-brand">
           <img src="/finance-tracker-mark.svg" class="brand-mark" alt="" aria-hidden="true"
                width="26" height="26" />
@@ -28,7 +35,7 @@
             class="brand-word brand-word--accent">Tracker</span></span>
         </div>
 
-        <nav class="sidebar-nav">
+        <nav class="sidebar-nav" id="sidebar-nav">
           <a href="#" class="nav-item" data-view="upload">
             <span class="nav-dot"></span>Upload
           </a>
@@ -57,6 +64,7 @@
 
         <div id="sidebar-month" class="sidebar-info"></div>
       </aside>
+      <div id="nav-backdrop" class="nav-backdrop"></div>
 
       <div class="main-column">
         <header class="site-header">

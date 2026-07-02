@@ -62,21 +62,21 @@ describe('index.html — no new webfont dependency introduced', () => {
 
 describe('index.html — nav order (v2 Pass 2)', () => {
   it('lists data-view attributes in the exact order: upload, overview, trends, monthly, yearly, context', () => {
-    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/);
+    const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/);
     expect(navMatch).not.toBeNull();
     const dataViews = [...navMatch[0].matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
     expect(dataViews).toEqual(['upload', 'overview', 'trends', 'monthly', 'yearly', 'context']);
   });
 
   it('keeps Overview as the only nav-item--active entry', () => {
-    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/)[0];
+    const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/)[0];
     const activeMatches = navMatch.match(/nav-item--active/g) ?? [];
     expect(activeMatches.length).toBe(1);
     expect(navMatch).toContain('nav-item nav-item--active" data-view="overview"');
   });
 
   it('History and Settings remain inert (not converted to nav-view links)', () => {
-    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/)[0];
+    const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/)[0];
     expect(navMatch).toContain('nav-item--inert');
     expect(navMatch).not.toContain('data-view="history"');
     expect(navMatch).not.toContain('data-view="settings"');
@@ -183,7 +183,7 @@ describe('index.html — push notification control (v2 Pass 3)', () => {
   });
 
   it('does not add a new Settings/History nav item for push (nav stays inert)', () => {
-    const navMatch = html.match(/<nav class="sidebar-nav">[\s\S]*?<\/nav>/)[0];
+    const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/)[0];
     expect(navMatch).not.toContain('data-view="push"');
     expect(navMatch).not.toContain('data-view="notifications"');
   });
