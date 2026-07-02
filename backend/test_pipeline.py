@@ -1136,9 +1136,9 @@ class TestSplitwiseTagging:
         }
         store.close()
 
-        # Tagged row -> Utilities (NOT the fake's 'Groceries' default).
+        # Tagged row -> Housing (NOT the fake's 'Groceries' default).
         tagged = next(d for d in rows if "SPLITWISE UTILITIES" in d)
-        assert rows[tagged] == "Utilities"
+        assert rows[tagged] == "Housing"
         # Ordinary row still LLM-categorised, so the pipeline did not stop.
         assert rows["SYNTH CORNER STORE"] == "Groceries"
         # Both rows counted as categorised (1 deterministic + 1 LLM).

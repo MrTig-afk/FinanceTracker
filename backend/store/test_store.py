@@ -451,12 +451,12 @@ class TestSummaryCorrectness:
         with Store(":memory:") as store:
             store.add_new(r)
             store.set_categories({
-                r.fingerprints[0]: "Utilities",
+                r.fingerprints[0]: "Housing",
                 r.fingerprints[1]: "Income",
             })
             result = store.summary("2026-06")
 
-        assert result["totals"]["Utilities"] == "-200.00"
+        assert result["totals"]["Housing"] == "-200.00"
         assert result["totals"]["Income"] == "2000.00"
         assert result["net"] == "1800.00"
         assert result["count"] == 2
@@ -1294,8 +1294,8 @@ class TestMonthView:
         with Store(":memory:") as store:
             store.add_new(r)
             store.set_categories({
-                r.fingerprints[0]: "Rent",
-                r.fingerprints[1]: "Rent",
+                r.fingerprints[0]: "Housing",
+                r.fingerprints[1]: "Housing",
                 r.fingerprints[2]: "Subscriptions",
             })
             result = store.month_view("2026-06")
@@ -1314,12 +1314,12 @@ class TestMonthView:
         with Store(":memory:") as store:
             store.add_new(r)
             store.set_categories({
-                r.fingerprints[0]: "Rent",
+                r.fingerprints[0]: "Housing",
                 r.fingerprints[1]: "Groceries",
             })
             result = store.month_view("2026-06")
 
-        row = next(c for c in result["comparison"] if c["category"] == "Rent")
+        row = next(c for c in result["comparison"] if c["category"] == "Housing")
         assert row["current"] == "0.00"
         assert row["previous"] == "-900.00"
         assert row["delta"] == "900.00"
@@ -1362,13 +1362,13 @@ class TestMonthView:
             store.add_new(r)
             store.set_categories({
                 r.fingerprints[0]: "Other",
-                r.fingerprints[1]: "Rent",
+                r.fingerprints[1]: "Housing",
                 r.fingerprints[2]: "Groceries",
             })
             result = store.month_view("2026-06")
 
         names = [row["category"] for row in result["comparison"]]
-        assert names == ["Rent", "Groceries", "Other"]
+        assert names == ["Housing", "Groceries", "Other"]
 
     def test_available_months_included_in_response(self) -> None:
         t1 = _txn("SYNTH A", amount="-10.00", d=date(2026, 5, 1))
@@ -1593,15 +1593,15 @@ class TestCategoryTrend:
             store.add_new(r)
             store.set_categories({
                 r.fingerprints[1]: "Income",
-                r.fingerprints[2]: "Rent",
+                r.fingerprints[2]: "Housing",
                 r.fingerprints[3]: "Groceries",
                 # r.fingerprints[0] left uncategorised (NULL) -> "Uncategorised"
             })
             result = store.category_trend(months=1, end_month="2026-06")
 
         names = [s["category"] for s in result["series"]]
-        # TAXONOMY order = Groceries, Utilities, Rent, ... Income, Other
-        assert names == ["Groceries", "Rent", "Income", "Uncategorised"]
+        # TAXONOMY order = Groceries, Housing, Dining Out, ... Income, Other
+        assert names == ["Groceries", "Housing", "Income", "Uncategorised"]
         assert names.index("Uncategorised") == len(names) - 1
 
     def test_spend_by_month_excludes_income_and_net_positive_categories(self) -> None:
@@ -1873,9 +1873,9 @@ class TestTransactionsForCategory:
     def test_empty_category_has_defined_shape(self):
         with Store(":memory:") as store:
             self._seed(store)
-            res = store.transactions_for_category("Rent", "2026-06")
+            res = store.transactions_for_category("Transport", "2026-06")
         assert res == {
-            "category": "Rent",
+            "category": "Transport",
             "month": "2026-06",
             "total": "0.00",
             "count": 0,

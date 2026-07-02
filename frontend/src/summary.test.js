@@ -258,7 +258,7 @@ describe('colorFor', () => {
 
   it('CATEGORY_COLORS covers all v1 taxonomy keys', () => {
     const required = [
-      'Groceries', 'Utilities', 'Rent', 'Dining Out', 'Transport',
+      'Groceries', 'Housing', 'Dining Out', 'Transport',
       'Entertainment', 'Subscriptions', 'Income', 'Other', 'Uncategorised',
     ];
     required.forEach((key) => {

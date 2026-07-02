@@ -22,7 +22,9 @@ import re
 # Recognised keyword (uppercased) -> taxonomy label. Extend as needed; any Splitwise
 # tag whose word is NOT here (or a bare "Splitwise") deliberately falls to "Other".
 _KEYWORDS: dict[str, str] = {
-    "UTILITIES": "Utilities",
+    "UTILITIES": "Housing",
+    "RENT": "Housing",
+    "HOUSING": "Housing",
     "FOOD": "Dining Out",
     "DINING": "Dining Out",
     "SETTLE": "Other",

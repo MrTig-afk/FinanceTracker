@@ -41,7 +41,7 @@ PAYLOAD = (
 CANNED_GOOD_CONTENT = json.dumps({
     "categories": {
         "0": "Groceries",
-        "1": "Utilities",
+        "1": "Housing",
         "2": "Transport",
         "3": "Subscriptions",
         "4": "Income",
@@ -58,7 +58,7 @@ CANNED_BARE_FENCE_CONTENT = f"```\n{CANNED_GOOD_CONTENT}\n```"
 CANNED_UNKNOWN_CAT_CONTENT = json.dumps({
     "categories": {
         "0": "Groceries",
-        "1": "Utilities",
+        "1": "Housing",
         "2": "Transport",
         "3": "Subscriptions",
         "4": "Income",
@@ -243,7 +243,7 @@ class TestHappyPath:
         result = categorise(_make_sanitise_result(), client=_make_client(recorder))
 
         assert result.categories[0] == "Groceries"
-        assert result.categories[1] == "Utilities"
+        assert result.categories[1] == "Housing"
         assert result.categories[2] == "Transport"
         assert result.categories[3] == "Subscriptions"
         assert result.categories[4] == "Income"
@@ -255,7 +255,7 @@ class TestHappyPath:
         result = categorise(_make_sanitise_result(), client=_make_client(recorder))
 
         assert result.category_totals["Groceries"] == "-72.40"
-        assert result.category_totals["Utilities"] == "-130.05"
+        assert result.category_totals["Housing"] == "-130.05"
         assert result.category_totals["Transport"] == "-18.90"
         assert result.category_totals["Subscriptions"] == "-15.99"
         assert result.category_totals["Income"] == "3200.00"
@@ -265,7 +265,7 @@ class TestHappyPath:
         """LLM-supplied category_totals are silently ignored; local computation is used."""
         content = json.dumps({
             "categories": {
-                "0": "Groceries", "1": "Utilities", "2": "Transport",
+                "0": "Groceries", "1": "Housing", "2": "Transport",
                 "3": "Subscriptions", "4": "Income", "5": "Dining Out",
             },
             "summary": "ok",
@@ -369,14 +369,14 @@ class TestUnknownCategoryCoercion:
         result = categorise(_make_sanitise_result(), client=_make_client(recorder))
 
         assert result.categories[0] == "Groceries"
-        assert result.categories[1] == "Utilities"
+        assert result.categories[1] == "Housing"
         assert result.categories[2] == "Transport"
 
     def test_missing_row_index_defaults_to_other(self):
         """LLM response missing an entry for a row_index → that row defaults to 'Other'."""
         content = json.dumps({
             "categories": {
-                "0": "Groceries", "1": "Utilities", "2": "Transport",
+                "0": "Groceries", "1": "Housing", "2": "Transport",
                 "3": "Subscriptions", "4": "Income",
                 # row 5 intentionally absent
             },
@@ -392,7 +392,7 @@ class TestUnknownCategoryCoercion:
         """LLM returns a row_index not in payload — it must not appear in categories."""
         content = json.dumps({
             "categories": {
-                "0": "Groceries", "1": "Utilities", "2": "Transport",
+                "0": "Groceries", "1": "Housing", "2": "Transport",
                 "3": "Subscriptions", "4": "Income", "5": "Dining Out",
                 "99": "Other",  # not in payload
             },
@@ -634,7 +634,7 @@ class TestDroppedRows:
     def test_dropped_row_labelled_other(self):
         sr = _make_sanitise_result(payload=PAYLOAD[:2], dropped=(7,))
         content = json.dumps({
-            "categories": {"0": "Groceries", "1": "Utilities"},
+            "categories": {"0": "Groceries", "1": "Housing"},
             "summary": "",
             "flagged": [],
         })
@@ -647,7 +647,7 @@ class TestDroppedRows:
         """Row 7 is dropped → no amount → must not contribute to category_totals."""
         sr = _make_sanitise_result(payload=PAYLOAD[:2], dropped=(7,))
         content = json.dumps({
-            "categories": {"0": "Groceries", "1": "Utilities"},
+            "categories": {"0": "Groceries", "1": "Housing"},
             "summary": "",
             "flagged": [],
         })
@@ -655,12 +655,12 @@ class TestDroppedRows:
         result = categorise(sr, client=_make_client(recorder))
 
         # Only the two payload rows should have totals; the dropped row has no amount
-        assert set(result.category_totals.keys()) <= {"Groceries", "Utilities"}
+        assert set(result.category_totals.keys()) <= {"Groceries", "Housing"}
 
     def test_payload_totals_correct_alongside_dropped(self):
         sr = _make_sanitise_result(payload=PAYLOAD[:2], dropped=(7,))
         content = json.dumps({
-            "categories": {"0": "Groceries", "1": "Utilities"},
+            "categories": {"0": "Groceries", "1": "Housing"},
             "summary": "",
             "flagged": [],
         })
@@ -668,7 +668,7 @@ class TestDroppedRows:
         result = categorise(sr, client=_make_client(recorder))
 
         assert result.category_totals["Groceries"] == "-72.40"
-        assert result.category_totals["Utilities"] == "-130.05"
+        assert result.category_totals["Housing"] == "-130.05"
 
     def test_multiple_dropped_rows_all_labelled_other(self):
         sr = _make_sanitise_result(payload=(PAYLOAD[0],), dropped=(7, 8, 9))
@@ -987,7 +987,7 @@ class TestFlaggedValidation:
     def test_flagged_entry_outside_payload_dropped(self):
         """row_index 99 in 'flagged' but not in payload → not in result.flagged."""
         content = json.dumps({
-            "categories": {"0": "Groceries", "1": "Utilities"},
+            "categories": {"0": "Groceries", "1": "Housing"},
             "summary": "",
             "flagged": [99],
         })

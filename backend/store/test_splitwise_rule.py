@@ -14,7 +14,9 @@ class TestRecognisedMappings:
     @pytest.mark.parametrize(
         "desc, expected",
         [
-            ("Splitwise utilities", "Utilities"),
+            ("Splitwise utilities", "Housing"),
+            ("Splitwise rent", "Housing"),
+            ("Splitwise housing", "Housing"),
             ("Splitwise food", "Dining Out"),
             ("Splitwise dining", "Dining Out"),
         ],
@@ -34,10 +36,10 @@ class TestTolerance:
     @pytest.mark.parametrize(
         "desc, expected",
         [
-            ("splitwise utilities", "Utilities"),   # all lower
+            ("splitwise utilities", "Housing"),     # all lower
             ("SPLITWISE FOOD", "Dining Out"),        # all upper
             ("Splitwise Food", "Dining Out"),        # mixed
-            ("SPLITWISE-UTILITIES", "Utilities"),    # hyphen
+            ("SPLITWISE-UTILITIES", "Housing"),      # hyphen
             ("SPLITWISE:FOOD", "Dining Out"),        # colon
             ("SPLITWISE_SETTLE", "Other"),           # underscore
             ("SPLITWISE   TRANSPORT", "Other"),      # multi-space, unmapped word -> Other
@@ -49,7 +51,7 @@ class TestTolerance:
     @pytest.mark.parametrize(
         "desc, expected",
         [
-            ("OSKO PAYMENT SPLITWISE UTILITIES ALICE", "Utilities"),
+            ("OSKO PAYMENT SPLITWISE UTILITIES ALICE", "Housing"),
             ("PAYID SPLITWISE FOOD FROM BOB 0412345678", "Dining Out"),
             ("EFTPOS 12345 SPLITWISE SETTLE JOHN SMITH", "Other"),
         ],
@@ -63,7 +65,7 @@ class TestTolerance:
 class TestFallback:
     @pytest.mark.parametrize(
         "desc",
-        ["Splitwise misc", "SPLITWISE", "Splitwise groceries", "splitwise rent"],
+        ["Splitwise misc", "SPLITWISE", "Splitwise groceries"],
     )
     def test_unknown_or_bare_tag_maps_to_other(self, desc):
         """Any 'Splitwise ...' with no recognised word (or bare) falls to Other."""

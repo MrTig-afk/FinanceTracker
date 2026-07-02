@@ -11,8 +11,7 @@ from __future__ import annotations
 # Fixed v1 taxonomy — FR-25 / PRD §17. Order is the canonical display order.
 TAXONOMY: tuple[str, ...] = (
     "Groceries",
-    "Utilities",
-    "Rent",
+    "Housing",
     "Dining Out",
     "Transport",
     "Entertainment",

@@ -517,7 +517,7 @@ class TestCategoryContextEndpoints:
 
     def test_get_returns_nine_categories(self, api_client):
         body = api_client.get("/category-context").json()
-        assert len(body["categories"]) == 9
+        assert len(body["categories"]) == 8
 
     def test_get_categories_in_taxonomy_order(self, api_client):
         from backend.store import TAXONOMY
@@ -558,7 +558,7 @@ class TestCategoryContextEndpoints:
             "/category-context",
             json={"categories": [{"name": "Groceries", "hints": "SYNTH HINT A"}]},
         ).json()
-        assert len(body["categories"]) == 9
+        assert len(body["categories"]) == 8
 
     def test_put_unknown_category_name_does_not_create_it(self, api_client):
         r = api_client.put(
@@ -569,7 +569,7 @@ class TestCategoryContextEndpoints:
         body = r.json()
         names = {c["name"] for c in body["categories"]}
         assert "Bogus" not in names
-        assert len(body["categories"]) == 9
+        assert len(body["categories"]) == 8
 
     def test_put_missing_name_422(self, api_client):
         r = api_client.put(
@@ -1033,7 +1033,7 @@ class TestCategoryTransactionsEndpoint:
     def test_empty_category_returns_zero_shape(self, api_client):
         _upload_both(api_client)
         body = api_client.get(
-            "/category-transactions", params={"category": "Rent"}
+            "/category-transactions", params={"category": "Housing"}
         ).json()
         assert body["count"] == 0
         assert body["transactions"] == []

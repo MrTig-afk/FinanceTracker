@@ -34,25 +34,19 @@ DEFAULT_CONTEXT: tuple[CategoryContext, ...] = (
         position=0,
     ),
     CategoryContext(
-        name="Utilities",
+        name="Housing",
         color="#4a90d9",
         hints=(
-            "AGL, Origin Energy, EnergyAustralia, Red Energy, Alinta, electricity, "
-            "gas and water. Internet and mobile: MORE, Aussie Broadband, Telstra, "
-            "Optus, TPG, iiNet, Vodafone, Aldi Mobile, Belong."
+            "Rent and home bills. Rent: usually monthly (sometimes weekly or "
+            "fortnightly) to a real estate agent, property manager or landlord such "
+            "as MICM, Apartment Living, Ray White, LJ Hooker, Harcourts, Barry Plant, "
+            "McGrath, realestate.com.au, Domain, Ailo; includes bond and deposit "
+            "payments. Utilities: electricity, gas and water (AGL, Origin Energy, "
+            "EnergyAustralia, Red Energy, Alinta) and internet and mobile (MORE, "
+            "Aussie Broadband, Telstra, Optus, TPG, iiNet, Vodafone, Aldi Mobile, "
+            "Belong)."
         ),
         position=1,
-    ),
-    CategoryContext(
-        name="Rent",
-        color="#9b6cd4",
-        hints=(
-            "Regular rent, usually monthly (sometimes weekly or fortnightly), paid to a "
-            "real estate agent, property manager or landlord. Common agents and platforms: "
-            "MICM, Apartment Living, Ray White, LJ Hooker, Harcourts, Barry Plant, McGrath, "
-            "realestate.com.au, Domain, Ailo. Includes bond and deposit payments."
-        ),
-        position=2,
     ),
     CategoryContext(
         name="Dining Out",
@@ -64,19 +58,19 @@ DEFAULT_CONTEXT: tuple[CategoryContext, ...] = (
             "via Square, shown as 'SQ *<merchant>'. Uber Eats, DoorDash, Menulog, "
             "coffee shops."
         ),
-        position=3,
+        position=2,
     ),
     CategoryContext(
         name="Transport",
         color="#34a7a3",
         hints="Opal, Myki, Go Card. Fuel: BP, Shell, Ampol, 7-Eleven. Uber, tolls (Linkt), parking.",
-        position=4,
+        position=3,
     ),
     CategoryContext(
         name="Entertainment",
         color="#d96ba6",
         hints="Cinemas (Hoyts, Event), concerts, Ticketek, sport, hobbies and games.",
-        position=5,
+        position=4,
     ),
     CategoryContext(
         name="Subscriptions",
@@ -86,18 +80,18 @@ DEFAULT_CONTEXT: tuple[CategoryContext, ...] = (
             "Also AI tools and services like OpenAI (ChatGPT), Anthropic (Claude), "
             "Perplexity, Google Gemini, GitHub Copilot, Cursor."
         ),
-        position=6,
+        position=5,
     ),
     CategoryContext(
         name="Income",
         color="#8BC34A",
         hints="Salary and wages, refunds, interest, transfers in.",
-        position=7,
+        position=6,
     ),
     CategoryContext(
         name="Other",
         color="#a89f8c",
         hints="Anything that doesn't clearly belong to another category.",
-        position=8,
+        position=7,
     ),
 )

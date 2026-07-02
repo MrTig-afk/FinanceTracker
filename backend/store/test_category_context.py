@@ -27,7 +27,7 @@ class TestFreshDbSeeding:
         self.store.close()
 
     def test_returns_nine_rows(self):
-        assert len(self.store.get_category_context()) == 9
+        assert len(self.store.get_category_context()) == 8
 
     def test_names_match_taxonomy_order(self):
         names = [c.name for c in self.store.get_category_context()]
@@ -35,7 +35,7 @@ class TestFreshDbSeeding:
 
     def test_positions_are_0_to_8_in_order(self):
         positions = [c.position for c in self.store.get_category_context()]
-        assert positions == list(range(9))
+        assert positions == list(range(8))
 
     def test_colors_match_default_context(self):
         colors = {c.name: c.color for c in self.store.get_category_context()}
@@ -70,7 +70,7 @@ class TestSaveRoundtrip:
 
     def test_save_returns_nine(self):
         written = self.store.save_category_context({"Groceries": "SYNTH HINT A"})
-        assert written == 9
+        assert written == 8
 
     def test_named_category_hint_updated(self):
         self.store.save_category_context({"Groceries": "SYNTH HINT A"})
@@ -79,15 +79,15 @@ class TestSaveRoundtrip:
 
     def test_multiple_named_categories_updated(self):
         self.store.save_category_context(
-            {"Groceries": "SYNTH GROCER A, SYNTH GROCER B", "Rent": "SYNTH LANDLORD"}
+            {"Groceries": "SYNTH GROCER A, SYNTH GROCER B", "Housing": "SYNTH LANDLORD"}
         )
         by_name = {c.name: c.hints for c in self.store.get_category_context()}
         assert by_name["Groceries"] == "SYNTH GROCER A, SYNTH GROCER B"
-        assert by_name["Rent"] == "SYNTH LANDLORD"
+        assert by_name["Housing"] == "SYNTH LANDLORD"
 
     def test_still_nine_rows_after_save(self):
         self.store.save_category_context({"Groceries": "SYNTH HINT A"})
-        assert len(self.store.get_category_context()) == 9
+        assert len(self.store.get_category_context()) == 8
 
     def test_name_color_position_unchanged_after_save(self):
         self.store.save_category_context({"Groceries": "SYNTH HINT A"})
@@ -99,10 +99,10 @@ class TestSaveRoundtrip:
         """Saving all 9 canonical categories' hints in one call roundtrips exactly."""
         synth_hints = {name: f"SYNTH HINT FOR {name.upper()}" for name in TAXONOMY}
         written = self.store.save_category_context(synth_hints)
-        assert written == 9
+        assert written == 8
 
         after = self.store.get_category_context()
-        assert len(after) == 9
+        assert len(after) == 8
         by_name = {c.name: c.hints for c in after}
         for name, hint in synth_hints.items():
             assert by_name[name] == hint
@@ -141,7 +141,7 @@ class TestFixedTaxonomyGuard:
 
     def test_unknown_name_does_not_add_a_row(self):
         self.store.save_category_context({"Bogus": "SYNTH VALUE"})
-        assert len(self.store.get_category_context()) == 9
+        assert len(self.store.get_category_context()) == 8
 
     def test_unknown_name_not_present_in_result(self):
         self.store.save_category_context({"Bogus": "SYNTH VALUE"})
@@ -156,13 +156,13 @@ class TestFixedTaxonomyGuard:
     def test_canonical_name_absent_from_dict_gets_empty_hints(self):
         self.store.save_category_context({"Groceries": "SYNTH HINT A"})
         by_name = {c.name: c.hints for c in self.store.get_category_context()}
-        assert by_name["Utilities"] == ""
+        assert by_name["Housing"] == ""
 
     def test_empty_dict_clears_all_hints(self):
         self.store.save_category_context({})
         for c in self.store.get_category_context():
             assert c.hints == ""
-        assert len(self.store.get_category_context()) == 9
+        assert len(self.store.get_category_context()) == 8
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +177,11 @@ class TestSeedIdempotency:
         db_path = str(tmp_path / "ctx.sqlite")
 
         store1 = Store(db_path)
-        assert len(store1.get_category_context()) == 9
+        assert len(store1.get_category_context()) == 8
         store1.close()
 
         store2 = Store(db_path)
-        assert len(store2.get_category_context()) == 9
+        assert len(store2.get_category_context()) == 8
         store2.close()
 
     def test_reopen_after_edit_preserves_edit(self, tmp_path):
@@ -194,5 +194,5 @@ class TestSeedIdempotency:
         store2 = Store(db_path)
         by_name = {c.name: c.hints for c in store2.get_category_context()}
         assert by_name["Groceries"] == "SYNTH PERSISTED HINT"
-        assert len(store2.get_category_context()) == 9
+        assert len(store2.get_category_context()) == 8
         store2.close()

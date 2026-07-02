@@ -14,8 +14,7 @@
 /** Fixed colour palette for the v1 taxonomy (matches the design mockup COLORS). */
 export const CATEGORY_COLORS = {
   Groceries: '#57b26f',
-  Utilities: '#4a90d9',
-  Rent: '#9b6cd4',
+  Housing: '#4a90d9',
   'Dining Out': '#e0913f',
   Transport: '#34a7a3',
   Entertainment: '#d96ba6',

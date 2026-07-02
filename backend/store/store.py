@@ -305,7 +305,7 @@ class Store:
     # ------------------------------------------------------------------
 
     def _seed_category_context_if_empty(self) -> None:
-        """Insert the 9 DEFAULT_CONTEXT rows when category_context is empty.
+        """Insert the 8 DEFAULT_CONTEXT rows when category_context is empty.
 
         Idempotent: only seeds an empty table, so a pre-existing DB is never
         re-seeded or duplicated. Runs for :memory:, tmp_path, and production DBs.
@@ -323,9 +323,9 @@ class Store:
         self.conn.commit()
 
     def get_category_context(self) -> list[CategoryContext]:
-        """Return the 9 canonical categories ordered by position, with stored hints.
+        """Return the 8 canonical categories ordered by position, with stored hints.
 
-        After seeding, the table always has the 9 rows.
+        After seeding, the table always has the 8 rows.
         """
         rows = self.conn.execute(
             "SELECT name, color, hints, position FROM category_context ORDER BY position"
@@ -341,13 +341,13 @@ class Store:
         ]
 
     def save_category_context(self, hints_by_name: dict[str, str]) -> int:
-        """Replace-all: rebuild the 9 canonical rows with hints from hints_by_name.
+        """Replace-all: rebuild the 8 canonical rows with hints from hints_by_name.
 
         name/color/position always come from DEFAULT_CONTEXT (canonical seed).
         Unknown names in hints_by_name are ignored; canonical names absent from
         the dict get hints=''. Never adds or removes categories (D1) — the table
-        always ends up with exactly the 9 canonical rows. DELETE + INSERT in one
-        transaction; commits once. Returns the number of rows written (9).
+        always ends up with exactly the 8 canonical rows. DELETE + INSERT in one
+        transaction; commits once. Returns the number of rows written (8).
         """
         now = _utc_now_iso()
         rows = [
