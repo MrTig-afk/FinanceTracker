@@ -902,6 +902,81 @@ class Store:
             for row in rows
         ]
 
+    def transactions_for_category(
+        self, category: str, year_month: str | None = None
+    ) -> dict:
+        """Return one category's transactions for a month (dashboard drill-down).
+
+        LOCAL-ONLY view: descriptions are the owner's own data, served only to the
+        owner's own client, never sent off-machine (same posture as summary()).
+        Defaults to latest_year_month(). The special label 'Uncategorised' selects
+        rows whose category IS NULL (mirrors summary()'s 'Uncategorised' key).
+
+        Rows are ordered by amount magnitude, largest first. All money values are
+        str(Decimal), never float.
+
+        Returns
+        -------
+        dict::
+
+            {
+                "category": "Subscriptions",
+                "month": "YYYY-MM" | None,
+                "total": "-170.01",
+                "count": 1,
+                "transactions": [
+                    {"date": "YYYY-MM-DD", "description": "...",
+                     "amount": "-170.01", "bank": "commbank"},
+                    ...
+                ],
+            }
+        """
+        if year_month is None:
+            year_month = self.latest_year_month()
+
+        if year_month is None:
+            return {
+                "category": category,
+                "month": None,
+                "total": "0.00",
+                "count": 0,
+                "transactions": [],
+            }
+
+        if category == "Uncategorised":
+            where, params = "year_month = ? AND category IS NULL", (year_month,)
+        else:
+            where, params = "year_month = ? AND category = ?", (year_month, category)
+
+        rows = self.conn.execute(
+            f"SELECT date, description, amount, bank FROM transactions WHERE {where}",
+            params,
+        ).fetchall()
+
+        # Sort by magnitude DESC in Python (amount is stored as canonical str).
+        ordered = sorted(
+            rows, key=lambda r: abs(amount_from_text(r["amount"])), reverse=True
+        )
+        total = sum(
+            (amount_from_text(r["amount"]) for r in rows), Decimal("0.00")
+        )
+
+        return {
+            "category": category,
+            "month": year_month,
+            "total": str(total),
+            "count": len(rows),
+            "transactions": [
+                {
+                    "date": r["date"],
+                    "description": r["description"],
+                    "amount": r["amount"],  # already canonical str(Decimal)
+                    "bank": r["bank"],
+                }
+                for r in ordered
+            ],
+        }
+
     # ------------------------------------------------------------------
     # Period views (v2 Pass 1: Monthly / Yearly + period-over-period
     # comparison; v2 Pass 2: category_trend). Read-only aggregation over

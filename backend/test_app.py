@@ -982,3 +982,78 @@ class TestPushEndpoints:
         bad = {"endpoint": secret_like_endpoint, "keys": {"p256dh": "only_p256dh"}}
         r = api_client.post("/push/subscribe", json=bad)
         assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# TestCategoryTransactionsEndpoint — GET /category-transactions (drill-down)
+# ---------------------------------------------------------------------------
+
+class TestCategoryTransactionsEndpoint:
+    """GET /category-transactions: LOCAL drill-down view of one category/month.
+
+    The api_client fake analyser labels every uploaded row 'Groceries', so after
+    _upload_both there are 5 Groceries rows in 2026-06.
+    """
+
+    def test_populated_category_returns_all_rows(self, api_client):
+        _upload_both(api_client)
+        r = api_client.get("/category-transactions", params={"category": "Groceries"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["category"] == "Groceries"
+        assert body["month"] == "2026-06"
+        assert body["count"] == 5
+        assert len(body["transactions"]) == 5
+
+    def test_each_txn_has_only_the_four_view_fields(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get(
+            "/category-transactions", params={"category": "Groceries"}
+        ).json()
+        for t in body["transactions"]:
+            assert set(t.keys()) == {"date", "description", "amount", "bank"}
+
+    def test_sorted_by_magnitude_desc(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get(
+            "/category-transactions", params={"category": "Groceries"}
+        ).json()
+        mags = [abs(float(t["amount"])) for t in body["transactions"]]
+        assert mags == sorted(mags, reverse=True)
+
+    def test_total_matches_sum_of_rows(self, api_client):
+        from decimal import Decimal
+        _upload_both(api_client)
+        body = api_client.get(
+            "/category-transactions", params={"category": "Groceries"}
+        ).json()
+        s = sum((Decimal(t["amount"]) for t in body["transactions"]), Decimal("0"))
+        assert Decimal(body["total"]) == s
+
+    def test_empty_category_returns_zero_shape(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get(
+            "/category-transactions", params={"category": "Rent"}
+        ).json()
+        assert body["count"] == 0
+        assert body["transactions"] == []
+        assert body["total"] == "0.00"
+
+    def test_unknown_category_is_400(self, api_client):
+        r = api_client.get("/category-transactions", params={"category": "Bananas"})
+        assert r.status_code == 400
+
+    def test_bad_month_is_400(self, api_client):
+        r = api_client.get(
+            "/category-transactions",
+            params={"category": "Groceries", "month": "2026/06"},
+        )
+        assert r.status_code == 400
+
+    def test_account_number_never_in_descriptions(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get(
+            "/category-transactions", params={"category": "Groceries"}
+        ).json()
+        blob = " ".join(t["description"] for t in body["transactions"])
+        assert _FAKE_ACCT not in blob

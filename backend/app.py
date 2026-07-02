@@ -63,7 +63,7 @@ from pydantic import BaseModel, Field
 from backend.data_source import Bank
 from backend.drive_uploader import is_configured
 from backend.pipeline import RunReport, UploadedFile, run_pipeline
-from backend.store import Store
+from backend.store import Store, TAXONOMY
 
 # ---------------------------------------------------------------------------
 # Bootstrap — load .env once at module import (config read, no network/DB/file-create)
@@ -277,6 +277,38 @@ async def summary(
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
 
     return app.state.store.summary(month)
+
+
+# ---------------------------------------------------------------------------
+# GET /category-transactions  (v2 — dashboard category drill-down)
+# ---------------------------------------------------------------------------
+
+# The 9 canonical categories plus the 'Uncategorised' bucket (NULL category),
+# which the summary/donut surfaces as its own slice.
+_DRILLDOWN_CATEGORIES: frozenset[str] = frozenset(TAXONOMY) | {"Uncategorised"}
+
+
+@app.get("/category-transactions")
+async def category_transactions(
+    category: Annotated[str, Query(description="category label")],
+    month: Annotated[str | None, Query(description="YYYY-MM")] = None,
+):
+    """Return one category's transactions for a month (dashboard drill-down).
+
+    LOCAL, read-only view of the owner's own store — same local-serve posture as
+    /summary. Descriptions are the owner's own data served to the owner's own
+    localhost/Tailscale client; nothing here is ever sent off-machine.
+
+    Query params:
+        category — one of the 9 canonical categories, or 'Uncategorised'.
+        month    — optional 'YYYY-MM'. Omit to get the latest month.
+    """
+    if category not in _DRILLDOWN_CATEGORIES:
+        raise HTTPException(status_code=400, detail="unknown category")
+    if month is not None and not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+
+    return app.state.store.transactions_for_category(category, month)
 
 
 # ---------------------------------------------------------------------------

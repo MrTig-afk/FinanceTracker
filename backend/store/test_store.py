@@ -1828,3 +1828,63 @@ class TestPushSubscriptionStore:
             with pytest.raises(ValueError):
                 store.upsert_push_subscription(bad)
             assert store.list_push_subscriptions() == []
+
+
+# ---------------------------------------------------------------------------
+# TestTransactionsForCategory — dashboard drill-down view
+# ---------------------------------------------------------------------------
+
+class TestTransactionsForCategory:
+    """store.transactions_for_category(): one category's rows for a month."""
+
+    def _seed(self, store: Store):
+        # Same month (_SYNTH_DATE -> 2026-06). Two Subscriptions, one left NULL.
+        a = _txn("SYNTH STREAMING", "-15.99")
+        b = _txn("SYNTH BIG SUB", "-170.01")
+        c = _txn("SYNTH MYSTERY", "-42.00")
+        store.add_new(_result(a, b, c))
+        store.set_categories(
+            {
+                transaction_fingerprint(a): "Subscriptions",
+                transaction_fingerprint(b): "Subscriptions",
+                # c intentionally left uncategorised (category IS NULL)
+            }
+        )
+
+    def test_matching_rows_sorted_by_magnitude_desc(self):
+        with Store(":memory:") as store:
+            self._seed(store)
+            res = store.transactions_for_category("Subscriptions", "2026-06")
+        assert res["category"] == "Subscriptions"
+        assert res["month"] == "2026-06"
+        assert res["count"] == 2
+        assert [t["amount"] for t in res["transactions"]] == ["-170.01", "-15.99"]
+        assert res["total"] == "-186.00"
+        for t in res["transactions"]:
+            assert set(t.keys()) == {"date", "description", "amount", "bank"}
+
+    def test_uncategorised_label_selects_null_category_rows(self):
+        with Store(":memory:") as store:
+            self._seed(store)
+            res = store.transactions_for_category("Uncategorised", "2026-06")
+        assert res["count"] == 1
+        assert res["transactions"][0]["description"] == "SYNTH MYSTERY"
+
+    def test_empty_category_has_defined_shape(self):
+        with Store(":memory:") as store:
+            self._seed(store)
+            res = store.transactions_for_category("Rent", "2026-06")
+        assert res == {
+            "category": "Rent",
+            "month": "2026-06",
+            "total": "0.00",
+            "count": 0,
+            "transactions": [],
+        }
+
+    def test_empty_db_returns_null_month(self):
+        with Store(":memory:") as store:
+            res = store.transactions_for_category("Subscriptions")
+        assert res["month"] is None
+        assert res["count"] == 0
+        assert res["transactions"] == []
