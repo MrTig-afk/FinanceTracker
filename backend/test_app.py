@@ -986,6 +986,70 @@ class TestPushEndpoints:
 
 
 # ---------------------------------------------------------------------------
+# TestMonthlyReminderEndpoint — POST /notify/monthly-reminder (v4 Feature D)
+#
+# Fail-closed: with push disabled (default env) this is a silent no-op that
+# returns sent=0 and never raises. No off-machine call is made.
+# ---------------------------------------------------------------------------
+
+
+class TestMonthlyReminderEndpoint:
+    def test_returns_ok_and_zero_when_push_disabled(self, api_client):
+        r = api_client.post("/notify/monthly-reminder")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "sent": 0}
+
+    def test_no_op_even_with_a_subscription_stored(self, api_client):
+        # A stored subscription must still be a no-op while push stays disabled.
+        api_client.post("/push/subscribe", json=_SYNTH_SUBSCRIBE_BODY)
+        r = api_client.post("/notify/monthly-reminder")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "sent": 0}
+
+    def test_never_leaks_a_stacktrace(self, api_client):
+        r = api_client.post("/notify/monthly-reminder")
+        assert "Traceback" not in r.text
+
+
+# ---------------------------------------------------------------------------
+# TestUploadWasQueued — processed-vs-recovered decision helper (v4 Feature D)
+# ---------------------------------------------------------------------------
+
+
+class TestUploadWasQueued:
+    """_upload_was_queued(): a stale client queued_at => processed_recovered."""
+
+    def test_none_is_live(self):
+        assert app_module._upload_was_queued(None) is False
+
+    def test_blank_is_live(self):
+        assert app_module._upload_was_queued("") is False
+
+    def test_unparseable_is_live(self):
+        assert app_module._upload_was_queued("not-a-timestamp") is False
+
+    def test_recent_timestamp_is_live(self):
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        assert app_module._upload_was_queued(now) is False
+
+    def test_old_timestamp_is_queued(self):
+        from datetime import datetime, timedelta, timezone
+
+        stale = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        assert app_module._upload_was_queued(stale) is True
+
+    def test_old_zulu_timestamp_is_queued(self):
+        from datetime import datetime, timedelta, timezone
+
+        stale = (datetime.now(timezone.utc) - timedelta(hours=2)).replace(
+            microsecond=0, tzinfo=None
+        ).isoformat() + "Z"
+        assert app_module._upload_was_queued(stale) is True
+
+
+# ---------------------------------------------------------------------------
 # TestCategoryTransactionsEndpoint — GET /category-transactions (drill-down)
 # ---------------------------------------------------------------------------
 

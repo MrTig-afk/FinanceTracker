@@ -19,7 +19,15 @@ import sys
 
 import pytest
 
-from backend.notifier import is_push_enabled, push_config, send_processed_notification
+from backend.notifier import (
+    NOTIFICATION_TYPES,
+    build_notification,
+    is_push_enabled,
+    push_config,
+    send_monthly_reminder,
+    send_notification,
+    send_processed_notification,
+)
 from backend.notifier.notifier import (
     NOTIFICATION_BODY,
     NOTIFICATION_TITLE,
@@ -285,7 +293,7 @@ class TestEnabledRealKeyedPath:
 class TestGenericContent:
     """The payload passed to webpush() must carry ZERO financial data."""
 
-    def test_payload_equals_fixed_generic_dict(self, monkeypatch):
+    def test_payload_is_structured_type_title_body(self, monkeypatch):
         import json
 
         captured = []
@@ -296,13 +304,17 @@ class TestGenericContent:
         _install_fake_pywebpush(monkeypatch, webpush_fn=_fake_webpush)
         store = FakeStore([_SYNTH_SUB_1])
         cfg = _enabled_config()
-        send_processed_notification(store, config=cfg)
+        send_processed_notification(store, count=5, config=cfg)
 
         assert len(captured) == 1
         payload = json.loads(captured[0])
-        assert payload == {"title": "FinanceTracker", "body": "Your statement was processed"}
+        # Structured {type, title, body} the service worker routes on.
+        assert set(payload.keys()) == {"type", "title", "body"}
+        assert payload["type"] == "processed"
+        assert payload["body"] == "Statements processed - 5 transactions sorted."
 
-    def test_payload_contains_no_digits(self, monkeypatch):
+    def test_payload_carries_only_counts_never_amounts_or_names(self, monkeypatch):
+        """Counts are allowed; amounts / merchants / account markers are not."""
         captured = []
 
         def _fake_webpush(*, data, **kwargs):
@@ -311,12 +323,13 @@ class TestGenericContent:
         _install_fake_pywebpush(monkeypatch, webpush_fn=_fake_webpush)
         store = FakeStore([_SYNTH_SUB_1, _SYNTH_SUB_2])
         cfg = _enabled_config()
-        send_processed_notification(store, config=cfg)
+        send_processed_notification(store, count=3, config=cfg)
 
+        forbidden = ["$", "balance", "account", "payee", "payer", "description"]
         for payload_str in captured:
-            assert not any(ch.isdigit() for ch in payload_str), (
-                f"payload must contain no digits (amounts/counts): {payload_str!r}"
-            )
+            lowered = payload_str.lower()
+            for token in forbidden:
+                assert token not in lowered, f"payload leaked {token!r}: {payload_str!r}"
 
     def test_payload_contains_no_endpoint_values(self, monkeypatch):
         captured = []
@@ -430,3 +443,126 @@ class TestPushConfig:
         cfg = push_config(enabled=False, public_key="ARG_KEY")
         assert cfg["enabled"] is False
         assert cfg["public_key"] == "ARG_KEY"
+
+
+# ---------------------------------------------------------------------------
+# TestBuildNotificationCatalog — the full {type, title, body} payload contract
+# ---------------------------------------------------------------------------
+
+
+class TestBuildNotificationCatalog:
+    """build_notification() renders each catalog type as a structured payload."""
+
+    def test_every_declared_type_builds(self):
+        for ntype in NOTIFICATION_TYPES:
+            payload = build_notification(ntype, count=2, detail="CommBank")
+            assert set(payload.keys()) == {"type", "title", "body"}
+            assert payload["type"] == ntype
+            assert payload["title"] and payload["body"]
+
+    def test_unknown_type_raises(self):
+        with pytest.raises(ValueError):
+            build_notification("not_a_real_type")
+
+    def test_processed_embeds_count(self):
+        p = build_notification("processed", count=7)
+        assert p["body"] == "Statements processed - 7 transactions sorted."
+
+    def test_processed_recovered_copy(self):
+        p = build_notification("processed_recovered", count=4)
+        assert p["type"] == "processed_recovered"
+        assert "queued upload" in p["body"]
+        assert "4 transactions" in p["body"]
+
+    def test_categorisation_failed_embeds_pending_count(self):
+        p = build_notification("categorisation_failed", count=9)
+        assert p["type"] == "categorisation_failed"
+        assert "9 transactions" in p["body"]
+
+    def test_categorisation_recovered_embeds_count(self):
+        p = build_notification("categorisation_recovered", count=6)
+        assert "6 transactions" in p["body"]
+
+    def test_parse_error_names_the_bank(self):
+        p = build_notification("parse_error", detail="Westpac")
+        assert "Westpac" in p["body"]
+
+    def test_drive_backup_failed_names_the_month(self):
+        p = build_notification("drive_backup_failed", detail="2026-06")
+        assert "2026-06" in p["body"]
+
+    def test_duplicate_noop_is_quiet_status_only(self):
+        p = build_notification("duplicate_noop")
+        assert p["type"] == "duplicate_noop"
+        assert not any(ch.isdigit() for ch in p["body"])
+
+    def test_generic_error_leaks_no_internal_detail(self):
+        p = build_notification("generic_error")
+        assert p["body"] == "Something went wrong on the last run - open the app to check."
+
+    def test_monthly_reminder_copy(self):
+        p = build_notification("monthly_reminder")
+        assert "New month" in p["body"]
+
+    def test_no_emoji_or_em_dash_anywhere(self):
+        """House style: plain hyphens only, no em dashes, no emojis."""
+        for ntype in NOTIFICATION_TYPES:
+            p = build_notification(ntype, count=1, detail="CommBank")
+            for text in (p["title"], p["body"]):
+                assert "—" not in text  # em dash
+                assert "–" not in text  # en dash
+                assert all(ord(ch) < 128 for ch in text), f"non-ascii in {ntype}: {text!r}"
+
+    def test_none_count_never_leaks_and_is_safe(self):
+        p = build_notification("processed", count=None)
+        assert "some transactions" in p["body"]
+
+
+# ---------------------------------------------------------------------------
+# TestSendNotificationCatalog — send path per type (fail-closed + enabled)
+# ---------------------------------------------------------------------------
+
+
+class TestSendNotificationCatalog:
+    def test_send_notification_hard_no_op_by_default(self, monkeypatch):
+        _install_fake_pywebpush(monkeypatch)  # webpush raises if called
+        store = FakeStore([_SYNTH_SUB_1], raise_if_listed=True)
+        assert send_notification(store, "processed", count=3) == 0
+        assert store.list_calls == 0
+
+    def test_send_monthly_reminder_hard_no_op_by_default(self, monkeypatch):
+        _install_fake_pywebpush(monkeypatch)
+        store = FakeStore([_SYNTH_SUB_1], raise_if_listed=True)
+        assert send_monthly_reminder(store) == 0
+        assert store.list_calls == 0
+
+    def test_send_notification_enabled_sends_expected_type(self, monkeypatch):
+        import json
+
+        captured = []
+
+        def _fake_webpush(*, data, **kwargs):
+            captured.append(json.loads(data))
+
+        _install_fake_pywebpush(monkeypatch, webpush_fn=_fake_webpush)
+        store = FakeStore([_SYNTH_SUB_1, _SYNTH_SUB_2])
+        cfg = _enabled_config()
+        result = send_notification(store, "parse_error", detail="CommBank", config=cfg)
+
+        assert result == 2
+        assert all(p["type"] == "parse_error" for p in captured)
+        assert all("CommBank" in p["body"] for p in captured)
+
+    def test_send_monthly_reminder_enabled(self, monkeypatch):
+        import json
+
+        captured = []
+
+        def _fake_webpush(*, data, **kwargs):
+            captured.append(json.loads(data))
+
+        _install_fake_pywebpush(monkeypatch, webpush_fn=_fake_webpush)
+        store = FakeStore([_SYNTH_SUB_1])
+        cfg = _enabled_config()
+        assert send_monthly_reminder(store, config=cfg) == 1
+        assert captured[0]["type"] == "monthly_reminder"

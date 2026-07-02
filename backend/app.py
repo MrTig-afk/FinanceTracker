@@ -14,6 +14,8 @@ PUT  /category-context  Replace-all of the 9 canonical categories' hints.
 POST /category-override Override one transaction's category + remember the correction.
 POST /push/subscribe    Store a Web Push subscription locally (v2 Pass 3 scaffold).
 POST /push/unsubscribe  Remove a stored Web Push subscription by endpoint.
+POST /notify/monthly-reminder  Fire the "new month, upload your statements" push
+                (for the always-on scheduler; fail-closed no-op when push is off).
 
 Privacy contract
 ----------------
@@ -57,12 +59,13 @@ from typing import Annotated
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from backend.data_source import Bank
 from backend.drive_uploader import is_configured
+from backend.notifier import send_monthly_reminder, send_notification
 from backend.pipeline import RunReport, UploadedFile, run_pipeline
 from backend.store import Store, TAXONOMY
 
@@ -187,17 +190,46 @@ class PushUnsubscribeIn(BaseModel):
 # POST /upload  (FR-5)
 # ---------------------------------------------------------------------------
 
+# How much older than "now" a client-supplied queued_at must be for the upload to
+# count as "was queued while the backend was offline" (drives the processed vs
+# processed_recovered notification). A live upload sends queued_at ~= now (or none)
+# and stays under this threshold; a flushed offline-queue upload sits well above it.
+_QUEUED_DELAY_THRESHOLD_SECONDS = 120
+
+
+def _upload_was_queued(queued_at: str | None) -> bool:
+    """True when a client-supplied ISO8601 queued_at is meaningfully in the past.
+
+    Fail-safe: any missing/unparseable value -> False (treat as a live upload).
+    Never raises. Naive timestamps are assumed UTC.
+    """
+    if not queued_at:
+        return False
+    try:
+        parsed = datetime.fromisoformat(queued_at.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - parsed
+    return age.total_seconds() >= _QUEUED_DELAY_THRESHOLD_SECONDS
+
 
 @app.post("/upload")
 async def upload(
     commbank: Annotated[UploadFile | None, File()] = None,
     westpac: Annotated[UploadFile | None, File()] = None,
+    queued_at: Annotated[str | None, Form()] = None,
 ):
     """Accept CommBank and/or Westpac CSV files and run the full pipeline.
 
     Multipart form fields:
         commbank   — optional; CommBank NetBank CSV
         westpac    — optional; Westpac CSV
+        queued_at  — optional ISO8601 timestamp the client stamped when it CREATED
+                     the upload. If the request only reaches the backend well after
+                     that (the client queued it while the backend was offline), the
+                     run reports processed_recovered instead of the live processed.
 
     At least one non-empty field is required (400 otherwise).
 
@@ -232,10 +264,20 @@ async def upload(
         raise HTTPException(status_code=400, detail="no files uploaded")
 
     try:
-        report = run_pipeline(uploads, store=app.state.store)
+        report = run_pipeline(
+            uploads,
+            store=app.state.store,
+            was_queued=_upload_was_queued(queued_at),
+        )
     except Exception:
         # Unexpected crash — log it server-side but return a safe generic message.
         logger.exception("run_pipeline raised an unexpected exception")
+        # Best-effort catch-all push (no internal detail). Fail-closed + guarded so
+        # a notifier problem never masks the original 500.
+        try:
+            send_notification(app.state.store, "generic_error")
+        except Exception:  # noqa: BLE001
+            logger.debug("generic_error notification skipped")
         raise HTTPException(status_code=500, detail="internal error")
 
     # Persist last run info for /status.
@@ -557,6 +599,27 @@ async def push_unsubscribe(body: PushUnsubscribeIn):
     """Remove a stored subscription by endpoint. No-op safe. Returns {"ok": True, "removed": n}."""
     removed = app.state.store.delete_push_subscription(body.endpoint)
     return {"ok": True, "removed": removed}
+
+
+# ---------------------------------------------------------------------------
+# POST /notify/monthly-reminder  (v4 Feature D — "new month, upload" nudge)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/notify/monthly-reminder")
+async def notify_monthly_reminder():
+    """Send the monthly "export and upload this month's statements" reminder.
+
+    Intended for the always-on service to hit on a schedule (e.g. Windows Task
+    Scheduler on the 1st of each month). Enabling that schedule is a separate OPS
+    step; this endpoint just performs one best-effort send when called.
+
+    Fail-closed: with push disabled / placeholder VAPID keys / no subscriptions,
+    this is a silent no-op that returns {"ok": True, "sent": 0}. Never raises for a
+    delivery problem. Carries NO transaction data (fixed status copy only).
+    """
+    sent = send_monthly_reminder(app.state.store)
+    return {"ok": True, "sent": sent}
 
 
 # ---------------------------------------------------------------------------

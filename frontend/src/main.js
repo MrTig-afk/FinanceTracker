@@ -18,6 +18,8 @@ import { createYearly } from './yearlyController.js';
 import { createTrends } from './trendsController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
 import { createPushController } from './push.js';
+import { createToast } from './toast.js';
+import { createNotificationBridge } from './notifications.js';
 import { createCategoryDrawer } from './categoryDrawer.js';
 import { createMobileNav } from './mobileNav.js';
 
@@ -180,6 +182,12 @@ document.addEventListener('DOMContentLoaded', () => {
     root: document,
     api: { subscribe: postPushSubscribe, unsubscribe: postPushUnsubscribe },
   });
+
+  // When the app is FOCUSED, the service worker relays push payloads to the page
+  // (instead of raising an OS notification); show them as an in-app toast. When
+  // backgrounded, the SW shows an OS notification instead and this never fires.
+  const notifyToast = createToast(document, { regionId: 'notify-toast-region' });
+  createNotificationBridge({ toast: notifyToast });
 
   // -------------------------------------------------------------------------
   // Manual refresh (FR-34 v1: no push — manual refresh button satisfies spec).

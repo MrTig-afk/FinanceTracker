@@ -833,6 +833,35 @@ a.nav-item {
   }
 }
 
+/* Push-notification toast kinds (in-app relay when the app is focused).
+   Each overrides the base accent/dot/timer colour; layout is shared. */
+.toast--success .toast-accent,
+.toast--success .toast-title .dot,
+.toast--success .toast-timer::after {
+  background: #4caf50;
+}
+.toast--success .toast-timer {
+  background: color-mix(in srgb, #4caf50 30%, transparent);
+}
+
+.toast--error .toast-accent,
+.toast--error .toast-title .dot,
+.toast--error .toast-timer::after {
+  background: #ef5350;
+}
+.toast--error .toast-timer {
+  background: color-mix(in srgb, #ef5350 30%, transparent);
+}
+
+.toast--info .toast-accent,
+.toast--info .toast-title .dot,
+.toast--info .toast-timer::after {
+  background: #4c8bf5;
+}
+.toast--info .toast-timer {
+  background: color-mix(in srgb, #4c8bf5 30%, transparent);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .toast {
     transition: opacity 0.001ms;

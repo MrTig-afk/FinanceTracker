@@ -5,7 +5,18 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { PUSH_TITLE, PUSH_BODY, notificationOptions, pickClientToFocus } from './swPush.js';
+import {
+  PUSH_TITLE,
+  PUSH_BODY,
+  PUSH_MESSAGE_SOURCE,
+  notificationOptions,
+  pickClientToFocus,
+  normalizePushPayload,
+  isClientFocused,
+  findFocusedClient,
+  notificationArgs,
+  routePush,
+} from './swPush.js';
 
 // ---------------------------------------------------------------------------
 // PUSH_TITLE / PUSH_BODY — fixed generic strings, no financial data
@@ -103,5 +114,154 @@ describe('pickClientToFocus', () => {
     const first = { id: 'first', focus: () => {} };
     const second = { id: 'second', focus: () => {} };
     expect(pickClientToFocus([first, second])).toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizePushPayload — safe {type,title,body} with fixed fallbacks
+// ---------------------------------------------------------------------------
+
+describe('normalizePushPayload', () => {
+  it('passes through a complete payload unchanged', () => {
+    const raw = { type: 'processed', title: 'Statement ready', body: '12 transactions processed' };
+    expect(normalizePushPayload(raw)).toEqual(raw);
+  });
+
+  it('falls back to the fixed generic strings for a null/undefined payload', () => {
+    expect(normalizePushPayload(null)).toEqual({
+      type: 'generic',
+      title: PUSH_TITLE,
+      body: PUSH_BODY,
+    });
+    expect(normalizePushPayload(undefined)).toEqual({
+      type: 'generic',
+      title: PUSH_TITLE,
+      body: PUSH_BODY,
+    });
+  });
+
+  it('fills missing fields individually', () => {
+    expect(normalizePushPayload({ type: 'parse_error' })).toEqual({
+      type: 'parse_error',
+      title: PUSH_TITLE,
+      body: PUSH_BODY,
+    });
+  });
+
+  it('ignores non-string / blank fields (falls back)', () => {
+    expect(normalizePushPayload({ type: 5, title: '   ', body: {} })).toEqual({
+      type: 'generic',
+      title: PUSH_TITLE,
+      body: PUSH_BODY,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isClientFocused / findFocusedClient
+// ---------------------------------------------------------------------------
+
+describe('isClientFocused', () => {
+  it('is true when focused === true', () => {
+    expect(isClientFocused({ focused: true })).toBe(true);
+  });
+  it('is true when visibilityState === "visible"', () => {
+    expect(isClientFocused({ visibilityState: 'visible' })).toBe(true);
+  });
+  it('is false for an unfocused/hidden client', () => {
+    expect(isClientFocused({ focused: false, visibilityState: 'hidden' })).toBe(false);
+  });
+  it('is false for null/undefined', () => {
+    expect(isClientFocused(null)).toBe(false);
+    expect(isClientFocused(undefined)).toBe(false);
+  });
+});
+
+describe('findFocusedClient', () => {
+  it('returns the first focused/visible client', () => {
+    const hidden = { visibilityState: 'hidden' };
+    const focused = { visibilityState: 'visible', id: 'x' };
+    expect(findFocusedClient([hidden, focused])).toBe(focused);
+  });
+  it('returns null when none are focused', () => {
+    expect(findFocusedClient([{ focused: false }, { visibilityState: 'hidden' }])).toBeNull();
+  });
+  it('returns null for an empty or missing list', () => {
+    expect(findFocusedClient([])).toBeNull();
+    expect(findFocusedClient(undefined)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// notificationArgs — showNotification(title, options) pair
+// ---------------------------------------------------------------------------
+
+describe('notificationArgs', () => {
+  it('derives a per-type tag and carries the payload in data', () => {
+    const { title, options } = notificationArgs({
+      type: 'parse_error',
+      title: 'Could not read the file',
+      body: 'Please re-export and try again',
+    });
+    expect(title).toBe('Could not read the file');
+    expect(options.body).toBe('Please re-export and try again');
+    expect(options.tag).toBe('financetracker-parse_error');
+    expect(options.icon).toBe('/icon.svg');
+    expect(options.badge).toBe('/icon.svg');
+    expect(options.data).toEqual({
+      type: 'parse_error',
+      title: 'Could not read the file',
+      body: 'Please re-export and try again',
+    });
+  });
+
+  it('falls back to generic strings + generic tag for an empty payload', () => {
+    const { title, options } = notificationArgs(null);
+    expect(title).toBe(PUSH_TITLE);
+    expect(options.body).toBe(PUSH_BODY);
+    expect(options.tag).toBe('financetracker-generic');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// routePush — THE pure focus-routing decision
+// ---------------------------------------------------------------------------
+
+describe('routePush', () => {
+  const payload = { type: 'processed', title: 'Done', body: '3 transactions processed' };
+
+  it('a FOCUSED client -> action "message" carrying the marked payload (no OS notification)', () => {
+    const clients = [{ visibilityState: 'hidden' }, { focused: true }];
+    const decision = routePush(clients, payload);
+    expect(decision.action).toBe('message');
+    expect(decision.message).toEqual({
+      source: PUSH_MESSAGE_SOURCE,
+      type: 'processed',
+      title: 'Done',
+      body: '3 transactions processed',
+    });
+    expect(decision.options).toBeUndefined();
+  });
+
+  it('NO focused client -> action "notify" with showNotification args', () => {
+    const clients = [{ focused: false, visibilityState: 'hidden' }];
+    const decision = routePush(clients, payload);
+    expect(decision.action).toBe('notify');
+    expect(decision.title).toBe('Done');
+    expect(decision.options.body).toBe('3 transactions processed');
+    expect(decision.options.tag).toBe('financetracker-processed');
+    expect(decision.message).toBeUndefined();
+  });
+
+  it('empty client list -> notify (backgrounded / no windows)', () => {
+    expect(routePush([], payload).action).toBe('notify');
+  });
+
+  it('malformed payload with a focused client still routes as message, using fallback strings', () => {
+    const decision = routePush([{ focused: true }], null);
+    expect(decision.action).toBe('message');
+    expect(decision.message.title).toBe(PUSH_TITLE);
+    expect(decision.message.body).toBe(PUSH_BODY);
+    expect(decision.message.type).toBe('generic');
   });
 });

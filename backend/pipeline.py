@@ -9,8 +9,11 @@ Composes the already-built stages in the exact order defined by the spec:
   Layer 2  — per-transaction fingerprint dedupe (skip rows already in the store)
   Layer 3  — categorise only-new rows via the sanitiser + analyser
   Output   — one monthly Excel workbook per distinct month; optional Drive upload
-  Notify   — best-effort generic "processed" push (v2 Pass 3; inert scaffold, see
-             backend.notifier — fail-closed no-op unless explicitly activated)
+  Notify   — best-effort Web Push from the catalog (processed / categorisation_failed
+             / parse_error / drive_backup_failed / duplicate_noop / *_recovered).
+             Fail-closed no-op unless PUSH_ENABLED + real VAPID keys + a subscription
+             exist; a notifier failure NEVER breaks the run. Copy is counts/status
+             only (see backend.notifier) — never amounts, merchants, or names.
 
 Privacy contract
 ----------------
@@ -21,7 +24,7 @@ Privacy contract
 - Error messages in RunReport.errors are fixed safe strings; they never contain raw
   descriptions, amounts, account numbers, or exception str() output.
 - The push-notification step (see Notify above) is feature-flagged OFF by default and
-  never sends transaction data even when active — see backend/notifier.
+  never sends transaction data even when active (counts/status only) — see backend/notifier.
 
 Injectable seams
 ----------------
@@ -49,14 +52,34 @@ from backend.idempotency import (
     is_noop,
 )
 from backend.sanitiser import sanitise
-from backend.analyser import categorise, build_context_prompt
+from backend.analyser import categorise, build_context_prompt, AnalyserError
 from backend.store import Store
 from backend.store.splitwise_rule import match_splitwise_tag
 from backend.excel_builder import build_workbook
 from backend.drive_uploader import upload_file
-from backend.notifier import send_processed_notification
+from backend.notifier import send_notification
 
 logger = logging.getLogger(__name__)
+
+# Human-readable bank names for notification copy (status only — never data).
+_BANK_DISPLAY = {
+    Bank.COMMBANK: "CommBank",
+    Bank.WESTPAC: "Westpac",
+}
+
+
+def _notify(store, ntype: str, *, count: int | None = None, detail: str | None = None) -> None:
+    """Fire one catalog notification, fully guarded.
+
+    A notifier failure (bad endpoint, missing dep, anything) must NEVER break a
+    pipeline run, mirroring the original send_processed_notification call site.
+    The notifier itself is fail-closed: a hard no-op unless push is enabled with
+    real VAPID keys and at least one subscription exists.
+    """
+    try:
+        send_notification(store, ntype, count=count, detail=detail)
+    except Exception:  # noqa: BLE001 — notifications are best-effort, never fatal
+        logger.debug("push notification step skipped (%s)", ntype)
 
 # ---------------------------------------------------------------------------
 # Domain dataclasses (frozen — immutable after construction)
@@ -114,6 +137,7 @@ def run_pipeline(
     drive_service=None,         # injected Drive service; None → env-gated Drive
     sanitise_log_dir=None,      # forwarded to sanitise(log_dir=...); tests pass tmp_path
     output_dir=None,            # forwarded to build_workbook(output_dir=...); tests pass tmp_path
+    was_queued: bool = False,   # True when this upload was queued while the backend was offline
 ) -> RunReport:
     """Run all pipeline stages for a batch of uploaded files.
 
@@ -135,6 +159,24 @@ def run_pipeline(
         Override audit log directory.  Tests pass tmp_path; production uses $LOG_DIR.
     output_dir:
         Override workbook output directory.  Tests pass tmp_path; production uses $OUTPUT_DIR.
+    was_queued:
+        Recovered-vs-live signal for the success notification. When True, a
+        successful run reports ``processed_recovered`` ("Backend back online -
+        your queued upload is now processed") instead of the live ``processed``.
+        The /upload endpoint derives this from a client-supplied ``queued_at``
+        timestamp: if the upload was created meaningfully before it reached the
+        backend (i.e. it sat in the client's offline queue), was_queued is True.
+        This is distinct from ``categorisation_recovered`` (OpenRouter was down,
+        orphan rows are now sorted), which is derived from store state below.
+
+    Notifications (best-effort, fail-closed, never fatal)
+    -----------------------------------------------------
+    Exactly one terminal notification per run, chosen by severity priority:
+      categorisation_failed  > drive_backup_failed > parse_error > success.
+    The success notification is processed_recovered (was_queued), else
+    categorisation_recovered (prior orphan rows cleared this run), else processed.
+    A true no-op fires duplicate_noop (or parse_error if the only files failed to
+    parse). generic_error is the app-level catch-all for an unexpected crash.
 
     Returns
     -------
@@ -145,6 +187,8 @@ def run_pipeline(
     errors: list[str] = []
     skipped = 0
     all_parsed_txns: list[Transaction] = []
+    # First bank whose file failed to parse / was unrecognised (for parse_error copy).
+    parse_error_bank: str | None = None
 
     # ------------------------------------------------------------------
     # Layer 1 — per-file fingerprint tracking (FR-12)
@@ -173,6 +217,8 @@ def run_pipeline(
             text = upload_to_csv_text(uf.content, uf.filename)
         except ValueError:
             errors.append(f"unrecognised file format: {uf.filename}")
+            if parse_error_bank is None:
+                parse_error_bank = _BANK_DISPLAY.get(uf.bank, uf.bank.value)
             continue
 
         # Choose the parser by the file's ACTUAL contents, not the upload box it
@@ -181,6 +227,8 @@ def run_pipeline(
         detected: Bank | None = detect_bank(text)
         if detected is None:
             errors.append(f"unrecognised CSV format: {uf.filename}")
+            if parse_error_bank is None:
+                parse_error_bank = _BANK_DISPLAY.get(uf.bank, uf.bank.value)
             continue
 
         # All parse work is wrapped so one bad file never aborts the batch.
@@ -189,6 +237,8 @@ def run_pipeline(
         except Exception:
             # Never include exception str — it could contain raw CSV values.
             errors.append(f"failed to parse {uf.filename} ({detected.value})")
+            if parse_error_bank is None:
+                parse_error_bank = _BANK_DISPLAY.get(detected, detected.value)
             continue
 
         all_parsed_txns.extend(txns)
@@ -223,6 +273,10 @@ def run_pipeline(
     # because a re-upload never re-enters them into categorisation. Fetched before
     # add_new so the no-op guard can account for them.
     pending_uncategorised = store.uncategorised()
+    # Prior orphans present at the START of this run (before add_new). If this run
+    # then categorises successfully, these were rescued from an earlier failed /
+    # rate-limited categorisation -> categorisation_recovered signal below.
+    prior_orphans = len(pending_uncategorised)
 
     if is_noop(result) and balance_updates == 0 and not pending_uncategorised:
         # Nothing new AND no balance changed — no sanitise, no LLM, no store write,
@@ -239,6 +293,12 @@ def run_pipeline(
             len(uploads),
             skipped,
         )
+        # Nothing new was ingested. If that is only because every file failed to
+        # parse, surface the parse failure; otherwise it is a genuine duplicate.
+        if parse_error_bank is not None:
+            _notify(store, "parse_error", detail=parse_error_bank)
+        else:
+            _notify(store, "duplicate_noop")
         return RunReport(
             files_seen=len(uploads),
             files_skipped=skipped,
@@ -308,18 +368,34 @@ def run_pipeline(
     )
 
     # categorise() short-circuits with zero HTTP calls when sresult.payload is empty.
-    analysis = categorise(sresult, client=analyser_client, context_preamble=preamble)
+    # AnalyserError (all model tiers failed / OpenRouter down) is caught here rather
+    # than propagated: the rows already persisted by add_new stay uncategorised
+    # (NULL category) as orphans and are recovered on a later run (see the
+    # pending_uncategorised recovery above). The run still returns a RunReport and
+    # fires the categorisation_failed notification below.
+    categorisation_failed = False
+    try:
+        analysis = categorise(sresult, client=analyser_client, context_preamble=preamble)
+    except AnalyserError:
+        categorisation_failed = True
+        errors.append("categorisation failed - transactions saved as pending")
+        analysis = None
 
-    # Map row_index (position in to_categorise) back to the row's primary-key id
-    # so set_categories writes by id.  sanitise() assigns row_index = enumerate
-    # position, so to_categorise[ri] is the row that produced category `cat`.
-    mapping = {
-        to_categorise[ri].id: cat
-        for ri, cat in analysis.categories.items()
-        if ri < len(to_categorise)  # defensive: ignore out-of-range indexes
-    }
-    categorised = store.set_categories(mapping) + splitwise_count
-    model_used = analysis.model_used
+    if analysis is not None:
+        # Map row_index (position in to_categorise) back to the row's primary-key id
+        # so set_categories writes by id.  sanitise() assigns row_index = enumerate
+        # position, so to_categorise[ri] is the row that produced category `cat`.
+        mapping = {
+            to_categorise[ri].id: cat
+            for ri, cat in analysis.categories.items()
+            if ri < len(to_categorise)  # defensive: ignore out-of-range indexes
+        }
+        categorised = store.set_categories(mapping) + splitwise_count
+        model_used = analysis.model_used
+    else:
+        # Only the deterministic Splitwise rows (if any) were categorised this run.
+        categorised = splitwise_count
+        model_used = ""
 
     logger.info(
         "pipeline categorised %d rows via model %r",
@@ -334,16 +410,24 @@ def run_pipeline(
     excel_path: str | None = None
     drive_file_id: str | None = None
     year_month: str | None = None
+    # First month whose Excel/Drive step failed (for the drive_backup_failed copy).
+    drive_failed_month: str | None = None
 
-    # Build one workbook per distinct month touched this run: months present in
-    # the new transactions PLUS months of any recovered orphan rows (so a run
-    # that only fixed previously-NULL categories still refreshes their workbook).
-    # Multi-month uploads (overlapping exports) produce one file per month.
-    months = sorted(
-        {t.date.isoformat()[:7] for t in result.new_transactions}
-        | {row.date[:7] for row in to_categorise}
-        | {row.date[:7] for row in tagged_rows}
-    )
+    # Skip the workbook/backup step entirely when categorisation wholly failed —
+    # the rows are still uncategorised orphans, so a workbook would be incomplete
+    # and a Drive upload would overwrite last good backup with partial data. The
+    # orphan-recovery run that later categorises them rebuilds the month then.
+    months: list[str] = []
+    if not categorisation_failed:
+        # Build one workbook per distinct month touched this run: months present in
+        # the new transactions PLUS months of any recovered orphan rows (so a run
+        # that only fixed previously-NULL categories still refreshes their workbook).
+        # Multi-month uploads (overlapping exports) produce one file per month.
+        months = sorted(
+            {t.date.isoformat()[:7] for t in result.new_transactions}
+            | {row.date[:7] for row in to_categorise}
+            | {row.date[:7] for row in tagged_rows}
+        )
 
     for ym in months:
         try:
@@ -362,13 +446,32 @@ def run_pipeline(
         except Exception:
             # Never include exception str — it could contain file paths or raw data.
             errors.append(f"excel/drive step failed for {ym}")
+            if drive_failed_month is None:
+                drive_failed_month = ym
 
-    # Best-effort generic "processed" push (v2 Pass 3). HARD no-op unless PUSH_ENABLED
-    # + real VAPID keys are configured (fail-closed). Never sends transaction data.
-    try:
-        send_processed_notification(store)
-    except Exception:
-        logger.debug("push notification step skipped")
+    # ------------------------------------------------------------------
+    # Notify — exactly one terminal notification, by severity priority.
+    # Best-effort + fail-closed (see _notify / backend.notifier): a hard no-op
+    # unless push is enabled with real VAPID keys AND a subscription exists, and
+    # a notifier failure never breaks the run. Copy is counts/status only.
+    # ------------------------------------------------------------------
+    remaining_uncat = len(store.uncategorised())
+    if categorisation_failed or remaining_uncat > 0:
+        # OpenRouter down (or some rows left NULL) -> rows saved as pending.
+        _notify(store, "categorisation_failed", count=remaining_uncat)
+    elif drive_failed_month is not None:
+        _notify(store, "drive_backup_failed", detail=drive_failed_month)
+    elif parse_error_bank is not None:
+        # Some rows processed fine, but at least one file could not be read.
+        _notify(store, "parse_error", detail=parse_error_bank)
+    elif was_queued:
+        # Upload had been queued while the backend was offline; now flushed.
+        _notify(store, "processed_recovered", count=categorised)
+    elif prior_orphans > 0:
+        # Earlier categorisation failure(s) now cleared this run.
+        _notify(store, "categorisation_recovered", count=prior_orphans)
+    else:
+        _notify(store, "processed", count=categorised)
 
     return RunReport(
         files_seen=len(uploads),
