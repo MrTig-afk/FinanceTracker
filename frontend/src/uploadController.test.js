@@ -29,22 +29,59 @@ function csvFile(name = 'commbank.csv') {
 // Minimal upload-section HTML (mirrors the contract in index.html).
 // ---------------------------------------------------------------------------
 
+function zoneHtml(bank) {
+  return `
+    <div id="dropzone-${bank}" class="zone" tabindex="0" role="button">
+      <div class="zone-body">
+        <div class="zone-empty" data-bank-empty="${bank}">
+          <span class="zone-hint">Drop file or click to browse</span>
+        </div>
+        <div class="zone-loaded" data-bank-loaded="${bank}" hidden>
+          <div class="zone-file">
+            <span class="zone-file-ico" data-bank-ico="${bank}">CSV</span>
+            <span id="filename-${bank}" class="zone-file-name filename"></span>
+            <span class="zone-file-info tabular" data-bank-info="${bank}"></span>
+          </div>
+        </div>
+      </div>
+      <input id="file-${bank}" type="file" accept=".csv,.xlsx" />
+    </div>
+  `;
+}
+
 const UPLOAD_HTML = `
   <section class="view" data-view="upload">
-    <div id="dropzone-commbank" class="dropzone" tabindex="0" role="button">
-      <span class="dropzone-hint">Drop CSV here</span>
-      <span id="filename-commbank" class="filename"></span>
-    </div>
-    <input id="file-commbank" type="file" accept=".csv" />
+    <section id="upload-card" class="card upload">
+      <div class="upload-zones">
+        ${zoneHtml('commbank')}
+        ${zoneHtml('westpac')}
+      </div>
+      <div class="upload-actions">
+        <button id="upload-submit" type="button">Upload and categorise</button>
+        <button id="upload-clear" type="button">Clear</button>
+        <p id="upload-status" role="status" aria-live="polite"></p>
+      </div>
+    </section>
 
-    <div id="dropzone-westpac" class="dropzone" tabindex="0" role="button">
-      <span class="dropzone-hint">Drop CSV here</span>
-      <span id="filename-westpac" class="filename"></span>
-    </div>
-    <input id="file-westpac" type="file" accept=".csv" />
-
-    <button id="upload-submit" type="button">Upload</button>
-    <p id="upload-status" role="status" aria-live="polite"></p>
+    <section id="preview-card" class="card preview-card" hidden>
+      <div class="preview-head">
+        <span class="preview-title">Preview</span>
+        <div id="preview-tabs" class="preview-tabs">
+          <button type="button" class="ptab" data-bank="westpac">Westpac</button>
+          <button type="button" class="ptab" data-bank="commbank">CommBank</button>
+        </div>
+        <span id="preview-meta" class="preview-meta tabular"></span>
+      </div>
+      <div class="preview-table-wrap">
+        <table class="preview-table">
+          <thead>
+            <tr><th>Date</th><th>Description</th><th class="num">Amount</th></tr>
+          </thead>
+          <tbody id="preview-body"></tbody>
+        </table>
+      </div>
+      <p id="preview-note" class="preview-note" hidden></p>
+    </section>
   </section>
 `;
 
@@ -457,9 +494,14 @@ describe('onUploadSuccess — auto-switch after AUTO_SWITCH_DELAY_MS', () => {
     controller = createUploadController({ root: document, queue, postFn, onUploadSuccess });
 
     simulateFileSelect('file-commbank', csvFile());
+    // Drain the local CSV preview read (jsdom's FileReader schedules a timer to
+    // fire onload) so the only timer we could observe below is one the
+    // controller itself scheduled.
+    await vi.advanceTimersByTimeAsync(20);
     clickSubmit();
     await vi.advanceTimersByTimeAsync(0);
 
+    // No auto-switch timer is scheduled on the error path.
     expect(vi.getTimerCount()).toBe(0);
   });
 });
@@ -473,5 +515,148 @@ describe('destroy', () => {
     controller = createUploadController({ root: document, queue, postFn: vi.fn() });
     expect(() => controller.destroy()).not.toThrow();
     controller = null; // already destroyed, skip afterEach destroy
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Client-side CSV preview + XLSX acceptance (redesign)
+// ---------------------------------------------------------------------------
+
+// Synthetic CommBank-shaped CSV (no header): date, signed amount, description, balance.
+const SYNTH_CB_CSV = [
+  '01/06/2026,-42.85,SYNTH GROCER,1000.00',
+  '02/06/2026,3200.00,SYNTH SALARY,4200.00',
+].join('\n');
+
+function cbCsvFile(name = 'commbank.csv') {
+  return new File([SYNTH_CB_CSV], name, { type: 'text/csv' });
+}
+
+function xlsxFile(name = 'westpac.xlsx') {
+  return new File(['PK\x03\x04'], name, {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+}
+
+// The CSV read is async (FileReader/.text()); flush macrotasks so the preview
+// render has run.
+function flush() {
+  return new Promise((r) => setTimeout(r, 10));
+}
+
+describe('client-side CSV preview', () => {
+  it('reveals the preview card and renders parsed rows when a CSV is chosen', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-commbank', cbCsvFile());
+    await flush();
+
+    expect(document.getElementById('preview-card').hidden).toBe(false);
+    const rows = document.querySelectorAll('#preview-body tr');
+    expect(rows.length).toBe(2);
+    expect(document.getElementById('preview-meta').textContent).toContain('Showing 2 of 2');
+  });
+
+  it('renders amounts with sign classes (negative red / positive accent)', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-commbank', cbCsvFile());
+    await flush();
+
+    const amountCells = document.querySelectorAll('#preview-body td.num');
+    expect(amountCells[0].classList.contains('amt-neg')).toBe(true);
+    expect(amountCells[1].classList.contains('amt-pos')).toBe(true);
+  });
+
+  it('sets the CommBank tab active and shows the row-count chip in the zone', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-commbank', cbCsvFile());
+    await flush();
+
+    const active = document.querySelector('#preview-tabs .ptab.active');
+    expect(active.dataset.bank).toBe('commbank');
+    expect(document.querySelector('[data-bank-info="commbank"]').textContent).toContain('2 rows detected');
+    expect(document.querySelector('[data-bank-loaded="commbank"]').hidden).toBe(false);
+  });
+
+  it('renders no transaction data into #upload-status (privacy)', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-commbank', cbCsvFile());
+    await flush();
+
+    expect(getStatus()).not.toContain('SYNTH GROCER');
+    expect(getStatus()).not.toContain('3200');
+  });
+});
+
+describe('XLSX acceptance', () => {
+  it('accepts an .xlsx file without a rejection message', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-westpac', xlsxFile());
+    await flush();
+
+    expect(getStatus()).not.toContain('accepted');
+    expect(document.querySelector('[data-bank-loaded="westpac"]').hidden).toBe(false);
+    expect(document.querySelector('[data-bank-ico="westpac"]').textContent).toBe('XLSX');
+  });
+
+  it('does NOT parse xlsx client-side — shows the after-upload note instead', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-westpac', xlsxFile());
+    await flush();
+
+    const note = document.getElementById('preview-note');
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toContain('XLSX preview available after upload');
+    expect(document.querySelectorAll('#preview-body tr').length).toBe(0);
+  });
+
+  it('builds and submits a form for an xlsx file (postFn called)', async () => {
+    const postFn = vi.fn().mockResolvedValue({});
+    controller = createUploadController({ root: document, queue, postFn });
+
+    simulateFileSelect('file-westpac', xlsxFile());
+    await flush();
+    clickSubmit();
+    await flush();
+
+    expect(postFn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Clear button', () => {
+  it('resets both zones, hides the preview, and clears the status', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-commbank', cbCsvFile());
+    await flush();
+    expect(document.getElementById('preview-card').hidden).toBe(false);
+
+    document.getElementById('upload-clear').click();
+
+    expect(document.getElementById('preview-card').hidden).toBe(true);
+    expect(getFilenameLabel('commbank')).toBe('');
+    expect(document.querySelector('[data-bank-loaded="commbank"]').hidden).toBe(true);
+    expect(getStatus()).toBe('');
+  });
+});
+
+describe('preview tab switching', () => {
+  it('switches the visible bank when a tab is clicked', async () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    simulateFileSelect('file-commbank', cbCsvFile());
+    await flush();
+
+    // Click the (empty) Westpac tab.
+    document.querySelector('#preview-tabs .ptab[data-bank="westpac"]').click();
+
+    const active = document.querySelector('#preview-tabs .ptab.active');
+    expect(active.dataset.bank).toBe('westpac');
+    expect(document.getElementById('preview-note').textContent).toContain('No Westpac file staged');
   });
 });

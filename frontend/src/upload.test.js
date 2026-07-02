@@ -7,13 +7,24 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   ALLOWED_EXT,
+  ALLOWED_EXTS,
   BANK_FIELDS,
   UploadValidationError,
   isCsvFile,
+  isXlsxFile,
+  isAcceptedUploadFile,
+  parseCsvPreview,
   buildUploadForm,
   postUpload,
 } from './upload.js';
 import { ApiError } from './api.js';
+
+function xlsxFile(name = 'westpac.xlsx') {
+  // Synthetic placeholder bytes — we never parse xlsx client-side.
+  return new File(['PK\x03\x04'], name, {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Synthetic fixtures — no real transaction data, no real CSVs.
@@ -107,6 +118,117 @@ describe('isCsvFile', () => {
   it('returns false for a plain Blob with a non-csv MIME type', () => {
     expect(isCsvFile(new Blob([SYNTH_CSV], { type: 'text/plain' }))).toBe(false);
   });
+
+  it('returns false for an .xlsx file (not a CSV)', () => {
+    expect(isCsvFile(xlsxFile())).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isXlsxFile / isAcceptedUploadFile / ALLOWED_EXTS
+// ---------------------------------------------------------------------------
+
+describe('isXlsxFile', () => {
+  it('returns true for a File with an .xlsx name', () => {
+    expect(isXlsxFile(xlsxFile('westpac.xlsx'))).toBe(true);
+  });
+
+  it('returns true for an uppercase .XLSX name', () => {
+    expect(isXlsxFile(xlsxFile('EXPORT.XLSX'))).toBe(true);
+  });
+
+  it('returns false for a .csv file', () => {
+    expect(isXlsxFile(csvFile())).toBe(false);
+  });
+
+  it('fails closed for a nameless Blob (cannot confidently detect xlsx)', () => {
+    expect(isXlsxFile(new Blob(['PK'], { type: '' }))).toBe(false);
+  });
+});
+
+describe('isAcceptedUploadFile', () => {
+  it('accepts CSV files', () => {
+    expect(isAcceptedUploadFile(csvFile())).toBe(true);
+  });
+
+  it('accepts XLSX files', () => {
+    expect(isAcceptedUploadFile(xlsxFile())).toBe(true);
+  });
+
+  it('rejects a .txt file', () => {
+    expect(isAcceptedUploadFile(new File([SYNTH_CSV], 'notes.txt', { type: 'text/plain' }))).toBe(false);
+  });
+});
+
+describe('ALLOWED_EXTS', () => {
+  it('contains both .csv and .xlsx', () => {
+    expect(ALLOWED_EXTS).toContain('.csv');
+    expect(ALLOWED_EXTS).toContain('.xlsx');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseCsvPreview — client-side, local-only preview parsing (no network)
+// ---------------------------------------------------------------------------
+
+describe('parseCsvPreview — commbank profile (no header)', () => {
+  // Synthetic rows: date, signed amount, description, balance.
+  const CB = [
+    '01/06/2026,-42.85,SYNTH GROCER,1000.00',
+    '02/06/2026,3200.00,SYNTH SALARY,4200.00',
+  ].join('\n');
+
+  it('parses each non-empty line as a row (no header skipped)', () => {
+    const rows = parseCsvPreview(CB, { bank: 'commbank' });
+    expect(rows).toHaveLength(2);
+  });
+
+  it('maps date/amount/description from the signed-amount column', () => {
+    const [first, second] = parseCsvPreview(CB, { bank: 'commbank' });
+    expect(first).toMatchObject({ date: '01/06/2026', description: 'SYNTH GROCER', amount: -42.85 });
+    expect(second.amount).toBe(3200);
+  });
+
+  it('defaults amount to 0 when the amount cell is not numeric', () => {
+    const rows = parseCsvPreview('01/06/2026,,SYNTH,10.00', { bank: 'commbank' });
+    expect(rows[0].amount).toBe(0);
+  });
+});
+
+describe('parseCsvPreview — westpac profile (header + split debit/credit)', () => {
+  // Synthetic: account-number, Date, Narrative, Debit, Credit, Balance.
+  const WP = [
+    'Account,Date,Narrative,Debit,Credit,Balance',
+    '123456,01/06/2026,SYNTH GROCER,42.85,,1000.00',
+    '123456,02/06/2026,SYNTH SALARY,,3200.00,4200.00',
+  ].join('\n');
+
+  it('skips the header row', () => {
+    const rows = parseCsvPreview(WP, { bank: 'westpac' });
+    expect(rows).toHaveLength(2);
+  });
+
+  it('drops the leading account-number column and merges debit/credit to a signed amount', () => {
+    const [debitRow, creditRow] = parseCsvPreview(WP, { bank: 'westpac' });
+    expect(debitRow).toMatchObject({ date: '01/06/2026', description: 'SYNTH GROCER', amount: -42.85 });
+    expect(creditRow).toMatchObject({ description: 'SYNTH SALARY', amount: 3200 });
+  });
+});
+
+describe('parseCsvPreview — quoting and edge cases', () => {
+  it('tolerates a quoted field containing a comma', () => {
+    const rows = parseCsvPreview('01/06/2026,-10.00,"SYNTH, INC",5.00', { bank: 'commbank' });
+    expect(rows[0].description).toBe('SYNTH, INC');
+  });
+
+  it('returns an empty array for empty text', () => {
+    expect(parseCsvPreview('', { bank: 'commbank' })).toEqual([]);
+  });
+
+  it('ignores blank lines', () => {
+    const rows = parseCsvPreview('01/06/2026,-1.00,A,0\n\n02/06/2026,-2.00,B,0\n', { bank: 'commbank' });
+    expect(rows).toHaveLength(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -162,7 +284,18 @@ describe('buildUploadForm', () => {
     expect(typeof err.message).toBe('string');
   });
 
-  it('throws UploadValidationError when a non-CSV file is provided', () => {
+  it('accepts an .xlsx file under a bank key', () => {
+    const form = buildUploadForm({ westpac: xlsxFile('westpac.xlsx') });
+    expect(form.has('westpac')).toBe(true);
+  });
+
+  it('accepts a mix of CSV and XLSX across the two banks', () => {
+    const form = buildUploadForm({ commbank: csvFile(), westpac: xlsxFile() });
+    expect(form.has('commbank')).toBe(true);
+    expect(form.has('westpac')).toBe(true);
+  });
+
+  it('throws UploadValidationError when a non-CSV/XLSX file is provided', () => {
     const txtFile = new File([SYNTH_CSV], 'export.txt', { type: 'text/plain' });
     expect(() => buildUploadForm({ commbank: txtFile })).toThrow(UploadValidationError);
   });

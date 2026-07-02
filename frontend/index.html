@@ -165,41 +165,126 @@
           <!-- Upload view (FR-1 / FR-4) -->
           <section class="view" data-view="upload" hidden>
             <section id="upload-card" class="card upload">
-              <h2 class="upload-title">Upload</h2>
               <div class="upload-zones">
-                <div class="upload-zone-wrapper">
-                  <span class="upload-zone-label">CommBank CSV</span>
-                  <div
-                    id="dropzone-commbank"
-                    class="dropzone"
-                    tabindex="0"
-                    role="button"
-                    aria-label="Drop CommBank CSV here or click to browse"
-                  >
-                    <span class="dropzone-hint">Drop CSV here or click to browse</span>
-                    <span id="filename-commbank" class="filename"></span>
+                <!-- CommBank dropzone -->
+                <div
+                  id="dropzone-commbank"
+                  class="zone"
+                  tabindex="0"
+                  role="button"
+                  aria-label="Drop CommBank statement here or click to browse"
+                >
+                  <div class="zone-top">
+                    <span class="zone-badge">
+                      <img src="/commbank-mark.svg" alt="" width="27" height="27" />
+                    </span>
+                    <span>
+                      <div class="zone-bank">CommBank</div>
+                      <div class="zone-sub">NetBank statement export</div>
+                    </span>
                   </div>
-                  <input id="file-commbank" type="file" accept=".csv" hidden />
+                  <div class="zone-body">
+                    <div class="zone-empty" data-bank-empty="commbank">
+                      <span class="zone-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L8 8m4-4l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                      </span>
+                      <span class="zone-hint">Drop file or click to browse</span>
+                      <span class="zone-formats"><span class="format-pill">CSV</span><span class="format-pill">XLSX</span></span>
+                    </div>
+                    <div class="zone-loaded" data-bank-loaded="commbank" hidden>
+                      <div class="zone-file">
+                        <span class="zone-file-ico" data-bank-ico="commbank">CSV</span>
+                        <span class="zone-file-meta">
+                          <span id="filename-commbank" class="zone-file-name filename"></span>
+                          <span class="zone-file-info tabular" data-bank-info="commbank"></span>
+                        </span>
+                        <span class="zone-check" aria-hidden="true">
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </span>
+                      </div>
+                      <span class="zone-formats">Ready to preview below</span>
+                    </div>
+                  </div>
+                  <input id="file-commbank" type="file" accept=".csv,.xlsx" hidden />
                 </div>
 
-                <div class="upload-zone-wrapper">
-                  <span class="upload-zone-label">Westpac CSV</span>
-                  <div
-                    id="dropzone-westpac"
-                    class="dropzone"
-                    tabindex="0"
-                    role="button"
-                    aria-label="Drop Westpac CSV here or click to browse"
-                  >
-                    <span class="dropzone-hint">Drop CSV here or click to browse</span>
-                    <span id="filename-westpac" class="filename"></span>
+                <!-- Westpac dropzone -->
+                <div
+                  id="dropzone-westpac"
+                  class="zone"
+                  tabindex="0"
+                  role="button"
+                  aria-label="Drop Westpac statement here or click to browse"
+                >
+                  <div class="zone-top">
+                    <span class="zone-badge">
+                      <img src="/westpac-mark.svg" alt="" width="27" height="27" />
+                    </span>
+                    <span>
+                      <div class="zone-bank">Westpac</div>
+                      <div class="zone-sub">Online banking export</div>
+                    </span>
                   </div>
-                  <input id="file-westpac" type="file" accept=".csv" hidden />
+                  <div class="zone-body">
+                    <div class="zone-empty" data-bank-empty="westpac">
+                      <span class="zone-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L8 8m4-4l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                      </span>
+                      <span class="zone-hint">Drop file or click to browse</span>
+                      <span class="zone-formats"><span class="format-pill">CSV</span><span class="format-pill">XLSX</span></span>
+                    </div>
+                    <div class="zone-loaded" data-bank-loaded="westpac" hidden>
+                      <div class="zone-file">
+                        <span class="zone-file-ico" data-bank-ico="westpac">CSV</span>
+                        <span class="zone-file-meta">
+                          <span id="filename-westpac" class="zone-file-name filename"></span>
+                          <span class="zone-file-info tabular" data-bank-info="westpac"></span>
+                        </span>
+                        <span class="zone-check" aria-hidden="true">
+                          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </span>
+                      </div>
+                      <span class="zone-formats">Ready to preview below</span>
+                    </div>
+                  </div>
+                  <input id="file-westpac" type="file" accept=".csv,.xlsx" hidden />
                 </div>
               </div>
 
-              <button id="upload-submit" type="button" class="upload-btn">Upload</button>
-              <p id="upload-status" class="upload-status" role="status" aria-live="polite"></p>
+              <div class="upload-actions">
+                <button id="upload-submit" type="button" class="upload-btn">Upload and categorise</button>
+                <button id="upload-clear" type="button" class="upload-clear-btn">Clear</button>
+                <p id="upload-status" class="upload-status" role="status" aria-live="polite"></p>
+              </div>
+            </section>
+
+            <!-- Client-side preview (read locally; nothing sent until Upload) -->
+            <section id="preview-card" class="card preview-card" hidden>
+              <div class="preview-head">
+                <span class="preview-title">Preview</span>
+                <div id="preview-tabs" class="preview-tabs">
+                  <button type="button" class="ptab" data-bank="westpac">Westpac</button>
+                  <button type="button" class="ptab" data-bank="commbank">CommBank</button>
+                </div>
+                <span id="preview-meta" class="preview-meta tabular"></span>
+              </div>
+              <div class="preview-table-wrap">
+                <table class="preview-table">
+                  <thead>
+                    <tr>
+                      <th style="width:130px;">Date</th>
+                      <th>Description</th>
+                      <th class="num" style="width:150px;">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody id="preview-body"></tbody>
+                </table>
+              </div>
+              <p id="preview-note" class="preview-note" hidden></p>
+              <div class="preview-foot">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 8v5M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                Preview is read locally. Nothing is sent until you press Upload.
+              </div>
             </section>
 
             <section id="push-card" class="card push-card">

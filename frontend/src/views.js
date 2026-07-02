@@ -13,7 +13,7 @@ const VIEW_COPY = {
   },
   upload: {
     title: 'Upload',
-    subtitle: 'Add CommBank and Westpac CSV exports.',
+    subtitle: 'Drop your CommBank and Westpac exports (CSV or XLSX) to categorise the month.',
   },
   context: {
     title: 'Category context',

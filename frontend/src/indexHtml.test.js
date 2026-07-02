@@ -151,6 +151,76 @@ describe('index.html — Overview mini spend-over-time bar', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Upload redesign — branded dropzones + client preview + xlsx acceptance.
+// ---------------------------------------------------------------------------
+
+describe('index.html — upload redesign (branded dropzones)', () => {
+  it('keeps the required dropzone / input / status / submit ids', () => {
+    for (const id of [
+      'dropzone-commbank',
+      'dropzone-westpac',
+      'file-commbank',
+      'file-westpac',
+      'filename-commbank',
+      'filename-westpac',
+      'upload-submit',
+      'upload-status',
+    ]) {
+      expect(html).toContain(`id="${id}"`);
+    }
+  });
+
+  it('both file inputs accept .csv AND .xlsx', () => {
+    const inputs = html.match(/<input id="file-(commbank|westpac)"[^>]*>/g) ?? [];
+    expect(inputs.length).toBe(2);
+    for (const input of inputs) {
+      expect(input).toContain('accept=".csv,.xlsx"');
+    }
+  });
+
+  it('references the bank brand marks on white logo tiles', () => {
+    expect(html).toContain('src="/commbank-mark.svg"');
+    expect(html).toContain('src="/westpac-mark.svg"');
+    expect(html).toContain('class="zone-badge"');
+  });
+
+  it('shows CSV and XLSX format pills in the empty state', () => {
+    expect(html).toContain('class="format-pill">CSV<');
+    expect(html).toContain('class="format-pill">XLSX<');
+  });
+
+  it('has the primary "Upload and categorise" button and a ghost Clear button', () => {
+    const submit = html.match(/<button id="upload-submit"[^>]*>([^<]*)<\/button>/);
+    expect(submit).not.toBeNull();
+    expect(submit[1]).toBe('Upload and categorise');
+    expect(html).toContain('id="upload-clear"');
+  });
+});
+
+describe('index.html — preview panel', () => {
+  it('has a #preview-card with tabs, meta, table body, and note', () => {
+    expect(html).toContain('id="preview-card"');
+    expect(html).toContain('id="preview-tabs"');
+    expect(html).toContain('id="preview-meta"');
+    expect(html).toContain('id="preview-body"');
+    expect(html).toContain('id="preview-note"');
+  });
+
+  it('shows the local-read privacy note in the footer', () => {
+    expect(html).toContain('Preview is read locally. Nothing is sent until you press Upload.');
+  });
+
+  it('places #preview-card between #upload-card and #push-card', () => {
+    const upload = html.indexOf('id="upload-card"');
+    const preview = html.indexOf('id="preview-card"');
+    const push = html.indexOf('id="push-card"');
+    expect(upload).toBeGreaterThan(-1);
+    expect(preview).toBeGreaterThan(upload);
+    expect(push).toBeGreaterThan(preview);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // v2 Pass 3 — push-notification control in the Upload view.
 // ---------------------------------------------------------------------------
 
