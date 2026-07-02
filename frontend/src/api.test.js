@@ -14,6 +14,7 @@ import {
   postReclassify,
   fetchCategoryContext,
   saveCategoryContext,
+  fetchCategoryTransactions,
   postPushSubscribe,
   postPushUnsubscribe,
   ApiError,
@@ -125,6 +126,60 @@ describe('fetchSummary', () => {
     const err = await fetchSummary().catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchCategoryTransactions — v2 category drill-down
+// ---------------------------------------------------------------------------
+
+const CANNED_DRILLDOWN = {
+  category: 'Subscriptions',
+  month: '2026-06',
+  total: '-170.01',
+  count: 1,
+  transactions: [
+    { date: '2026-06-12', description: 'SYNTH SUB', amount: '-170.01', bank: 'commbank' },
+  ],
+};
+
+describe('fetchCategoryTransactions', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_DRILLDOWN));
+    const result = await fetchCategoryTransactions('Subscriptions', '2026-06');
+    expect(result).toEqual(CANNED_DRILLDOWN);
+  });
+
+  it('encodes the category and month as query params', async () => {
+    const mockFetch = makeOkFetch(CANNED_DRILLDOWN);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchCategoryTransactions('Dining Out', '2026-06');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/category-transactions?');
+    expect(calledUrl).toContain('category=Dining+Out');
+    expect(calledUrl).toContain('month=2026-06');
+  });
+
+  it('omits the month param when not supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_DRILLDOWN);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchCategoryTransactions('Subscriptions');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('category=Subscriptions');
+    expect(calledUrl).not.toContain('month=');
+  });
+
+  it('rejects with ApiError carrying the status on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await fetchCategoryTransactions('Bananas').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchCategoryTransactions('Subscriptions').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
   });
 });
 

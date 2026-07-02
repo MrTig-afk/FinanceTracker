@@ -125,6 +125,33 @@ export async function fetchTrends(months, end) {
 }
 
 /**
+ * Fetch one category's transactions for a month (dashboard drill-down).
+ * Reads the owner's own local backend only; descriptions never go off-machine.
+ * @param {string} category  Canonical category name, or 'Uncategorised'.
+ * @param {string|undefined} month  Optional 'YYYY-MM'. Omitted → latest month.
+ * @returns {Promise<{category: string, month: string|null, total: string, count: number, transactions: Array<{date: string, description: string, amount: string, bank: string}>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function fetchCategoryTransactions(category, month) {
+  const params = new URLSearchParams({ category });
+  if (month) params.set('month', month);
+  const url = `${API_BASE}/category-transactions?${params.toString()}`;
+
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
  * Apply or revert the small-fuel-stop 'Dining Out' rule for a month.
  * Edits the owner's own local backend only; returns the updated summary.
  * @param {boolean} enabled       true = apply the rule, false = revert it.

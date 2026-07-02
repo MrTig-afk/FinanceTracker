@@ -59,6 +59,7 @@ export function createUploadController({
   // --- Listener registry (for cleanup) -------------------------------------
   const _listeners = [];
   let _switchTimer = null;
+  let _submitting = false;
 
   function _on(el, event, handler) {
     if (!el) return;
@@ -72,6 +73,16 @@ export function createUploadController({
     if (!statusEl) return;
     statusEl.textContent = msg;
     statusEl.classList.toggle('upload-status--error', isError);
+  }
+
+  // Toggle the in-flight processing state: disable the button (so a slow
+  // categorisation can't be double-submitted) and show an animated spinner in
+  // the status line. Called immediately on click — before awaiting the upload —
+  // so the user gets instant feedback while the backend runs the analyser.
+  function _setProcessing(on) {
+    _submitting = on;
+    if (submitBtn) submitBtn.disabled = on;
+    if (statusEl) statusEl.classList.toggle('upload-status--processing', on);
   }
 
   // --- Slot management ------------------------------------------------------
@@ -136,6 +147,11 @@ export function createUploadController({
   // --- Submit handler -------------------------------------------------------
 
   async function _handleSubmit() {
+    // Guard: ignore repeat clicks while an upload is already in flight. The
+    // backend runs the analyser synchronously, so the request can take several
+    // seconds — without this, an impatient double-click would fire twice.
+    if (_submitting) return;
+
     // Capture current selection before any clearing.
     const files = {};
     if (selected.commbank) files.commbank = selected.commbank;
@@ -154,13 +170,19 @@ export function createUploadController({
       return;
     }
 
+    // Immediate feedback: lock the button and show the spinner BEFORE awaiting,
+    // so the click is never a dead no-op while the backend categorises.
+    _setProcessing(true);
+    _setStatus('Processing your statements. This can take a few seconds.');
+
     try {
       await _postFn(form);
 
-      // Success — clear selection and refresh the dashboard.
+      // Success — clear the in-flight state, selection, and refresh the dashboard.
+      _setProcessing(false);
       _setSlot('commbank', null);
       _setSlot('westpac', null);
-      _setStatus('Uploaded — processing.');
+      _setStatus('Uploaded. Opening your overview.');
       if (onUploaded) await onUploaded();
 
       if (onUploadSuccess) {
@@ -172,6 +194,9 @@ export function createUploadController({
         }, AUTO_SWITCH_DELAY_MS);
       }
     } catch (err) {
+      // Clear the in-flight state first, whatever the failure — re-enables the
+      // button so the user can retry.
+      _setProcessing(false);
       if (err instanceof ApiError) {
         if (err.status === null && err.cause != null) {
           // Network-level error: backend unreachable — queue for later retry.
@@ -179,7 +204,7 @@ export function createUploadController({
           await queue.enqueue(files);
           _setSlot('commbank', null);
           _setSlot('westpac', null);
-          _setStatus('Backend unreachable — queued, will retry.');
+          _setStatus('Backend unreachable, queued and will retry.');
         } else {
           // Server returned an explicit error (4xx / 5xx).
           // Do NOT queue — the backend actively rejected this request;

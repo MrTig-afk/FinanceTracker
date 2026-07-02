@@ -25,6 +25,9 @@ const AFFECTED_CATEGORIES = new Set(['Transport', 'Dining Out']);
  * Pass `document` in production; pass a jsdom Document in tests.
  *
  * @param {Document} root
+ * @param {{ onCategorySelect?: (category: string, meta: { month: string|null, color: string }) => void }} [opts]
+ *   onCategorySelect fires when a legend row or donut slice is clicked, with the
+ *   category name and the month/colour needed to open the drill-down drawer.
  * @returns {{
  *   render(summary: object, opts?: { pulse?: boolean }): void,
  *   showEmpty(): void,
@@ -33,7 +36,7 @@ const AFFECTED_CATEGORIES = new Set(['Transport', 'Dining Out']);
  *   destroy(): void,
  * }}
  */
-export function createDashboard(root = document) {
+export function createDashboard(root = document, { onCategorySelect } = {}) {
   const doc = root.documentElement ? root : root.ownerDocument ?? document;
 
   const monthLabelEl = root.getElementById('month-label');
@@ -194,6 +197,25 @@ export function createDashboard(root = document) {
       rowEl.addEventListener('mouseenter', () => _setHighlight(i));
       rowEl.addEventListener('mouseleave', () => _setHighlight(null));
 
+      // Click / keyboard-activate a legend row to open its category drill-down.
+      if (onCategorySelect) {
+        rowEl.classList.add('is-clickable');
+        rowEl.setAttribute('role', 'button');
+        rowEl.tabIndex = 0;
+        const activate = () =>
+          onCategorySelect(label, {
+            month: lastSummary?.year_month ?? null,
+            color,
+          });
+        rowEl.addEventListener('click', activate);
+        rowEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            activate();
+          }
+        });
+      }
+
       const top = document.createElement('div');
       top.className = 'legend-row-top';
 
@@ -347,8 +369,14 @@ export function createDashboard(root = document) {
           {
             data: data.values,
             backgroundColor: data.colors,
+            // Pin the hovered arc to its exact palette colour. Without this,
+            // Chart.js derives a hover colour (saturate+darken) that shifts
+            // periwinkle hues toward blue, so the arc no longer matched its
+            // legend swatch on hover.
+            hoverBackgroundColor: data.colors,
             borderColor: _currentSurfaceColor(),
             borderWidth: 3,
+            hoverBorderColor: _currentSurfaceColor(),
             hoverOffset: 12,
           },
         ],
@@ -377,6 +405,14 @@ export function createDashboard(root = document) {
         },
         onHover(event, elements) {
           _setHighlight(elements && elements.length ? elements[0].index : null);
+        },
+        onClick(event, elements) {
+          if (!onCategorySelect || !elements || !elements.length) return;
+          const idx = elements[0].index;
+          onCategorySelect(data.labels[idx], {
+            month: lastSummary?.year_month ?? null,
+            color: data.colors[idx],
+          });
         },
       },
     });

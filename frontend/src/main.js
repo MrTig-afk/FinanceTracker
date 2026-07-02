@@ -17,6 +17,7 @@ import { createYearly } from './yearlyController.js';
 import { createTrends } from './trendsController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
 import { createPushController } from './push.js';
+import { createCategoryDrawer } from './categoryDrawer.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -50,7 +51,10 @@ if (import.meta.env.PROD) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  const dash = createDashboard(document);
+  const categoryDrawer = createCategoryDrawer({ root: document });
+  const dash = createDashboard(document, {
+    onCategorySelect: (category, meta) => categoryDrawer.open(category, meta),
+  });
   const overviewTrend = createOverviewTrend({ root: document });
   const statusDot = document.getElementById('status-dot');
   const refreshBtn = document.getElementById('refresh');

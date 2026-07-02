@@ -173,6 +173,60 @@ describe('submit — postFn resolves', () => {
     expect(getStatus()).toContain('Uploaded');
   });
 
+  it('shows a processing state (disabled button + spinner) while in flight, and clears it on success', async () => {
+    let resolveUpload;
+    const postFn = vi.fn(() => new Promise((res) => { resolveUpload = res; }));
+    controller = createUploadController({ root: document, queue, postFn });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+
+    // Synchronously after the click, before the upload resolves.
+    const btn = document.getElementById('upload-submit');
+    const status = document.getElementById('upload-status');
+    expect(btn.disabled).toBe(true);
+    expect(status.classList.contains('upload-status--processing')).toBe(true);
+    expect(getStatus()).toContain('Processing');
+
+    resolveUpload({});
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Cleared on success.
+    expect(btn.disabled).toBe(false);
+    expect(status.classList.contains('upload-status--processing')).toBe(false);
+    expect(getStatus()).toContain('Uploaded');
+  });
+
+  it('ignores a second submit while an upload is already in flight', async () => {
+    let resolveUpload;
+    const postFn = vi.fn(() => new Promise((res) => { resolveUpload = res; }));
+    controller = createUploadController({ root: document, queue, postFn });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    clickSubmit(); // second click while in flight must not fire a second request
+
+    expect(postFn).toHaveBeenCalledOnce();
+
+    resolveUpload({});
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  it('re-enables the button and clears the spinner when the upload fails', async () => {
+    const serverErr = new ApiError('upload failed', { status: 500, cause: null });
+    const postFn = vi.fn().mockRejectedValue(serverErr);
+    controller = createUploadController({ root: document, queue, postFn });
+
+    simulateFileSelect('file-commbank', csvFile());
+    clickSubmit();
+    await new Promise((r) => setTimeout(r, 20));
+
+    const btn = document.getElementById('upload-submit');
+    const status = document.getElementById('upload-status');
+    expect(btn.disabled).toBe(false);
+    expect(status.classList.contains('upload-status--processing')).toBe(false);
+  });
+
   it('calls onUploaded exactly once after a successful upload', async () => {
     const postFn = vi.fn().mockResolvedValue({ processed: 1 });
     const onUploaded = vi.fn().mockResolvedValue(undefined);
