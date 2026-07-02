@@ -36,7 +36,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from backend.data_source import Bank, Transaction, detect_bank, parse_text
+from backend.data_source import (
+    Bank,
+    Transaction,
+    detect_bank,
+    parse_text,
+    upload_to_csv_text,
+)
 from backend.idempotency import (
     file_fingerprint,
     filter_new_transactions,
@@ -59,16 +65,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class UploadedFile:
-    """One bank CSV file received in the upload request.
+    """One bank statement file (CSV or .xlsx) received in the upload request.
 
     Carries raw bytes in memory only — content is NEVER written to a tracked path.
     filename is for display purposes only; it is never echoed verbatim in error messages
-    that could be seen by a third party (all errors are fixed safe strings).
+    that could be seen by a third party (all errors are fixed safe strings). It is also
+    a hint for xlsx routing (a ``.xlsx`` extension), though the ZIP magic bytes are the
+    authoritative signal.
     """
 
-    filename: str   # display name; e.g. file.filename or "<bank>.csv"
-    bank: Bank      # which parser profile to use
-    content: bytes  # raw CSV bytes — in memory only, never persisted to a tracked path
+    filename: str   # display name / routing hint; e.g. file.filename or "<bank>.csv"
+    bank: Bank      # which upload box it arrived in (parser is chosen by content)
+    content: bytes  # raw CSV or .xlsx bytes — in memory only, never persisted to a tracked path
 
 
 @dataclass(frozen=True)
@@ -155,11 +163,17 @@ def run_pipeline(
             skipped += 1
             logger.debug("file already processed (re-parsed for balance reconciliation): %s", uf.filename)
 
-        # Decode: prefer UTF-8 with BOM stripping; fall back to replace-mode on error.
+        # Normalise the upload to CSV text. A CSV is decoded (UTF-8 w/ BOM,
+        # tolerant fallback); an .xlsx (detected by ZIP magic bytes or filename)
+        # is read by openpyxl and flattened to CSV text so it flows through the
+        # exact same detection + per-bank parsers below. A corrupt/unreadable
+        # xlsx raises ValueError and is treated like an unrecognised file — the
+        # batch is not aborted and the file is NOT fingerprinted.
         try:
-            text = uf.content.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = uf.content.decode("utf-8", errors="replace")
+            text = upload_to_csv_text(uf.content, uf.filename)
+        except ValueError:
+            errors.append(f"unrecognised file format: {uf.filename}")
+            continue
 
         # Choose the parser by the file's ACTUAL contents, not the upload box it
         # arrived in. A file that matches neither profile is rejected here and,
