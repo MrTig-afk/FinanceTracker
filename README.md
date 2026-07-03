@@ -4,6 +4,12 @@ A private, self-hosted personal finance tracker. It turns monthly Commonwealth B
 
 You run it on your own machine, with your own API keys. Nothing here is a hosted service: this repo is the scaffolding. You bring the keys and the data, and all of the data stays on your hardware.
 
+<p align="center">
+  <img src="screenshots/financetracker-overview-dark.png" alt="FinanceTracker overview screen: dark theme, spending donut and category breakdown (synthetic demo data)" width="340">
+</p>
+
+*The screenshot uses synthetic demo data generated in code — no real transactions, in keeping with the rest of the repo.*
+
 ## Why it exists
 
 There is no free, fully automated way for an individual in Australia to pull CommBank/Westpac data programmatically (the Consumer Data Right requires an accredited recipient in the middle). FinanceTracker accepts a two minute manual step each month, downloading two CSVs, in exchange for zero running cost and total data control. Everything after the download is automated: parsing, deduping, categorising, storing, and charting.
