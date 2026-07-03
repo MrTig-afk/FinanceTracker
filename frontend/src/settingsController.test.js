@@ -210,6 +210,43 @@ describe('monthly budgets editor', () => {
     expect(after.value).toBe('300.00');
   });
 
+  it('flashes an inline "Saved" marker on the edited row (phone-visible feedback)', async () => {
+    const api = makeApi({
+      getBudgets: vi.fn().mockResolvedValue(synthBudgets({})),
+      putBudgets: vi.fn().mockResolvedValue(synthBudgets({ Groceries: '300.00' })),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const input = document.querySelector('.settings-budget-input[aria-label="Monthly budget for Groceries"]');
+    input.value = '300';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+
+    const marker = document.querySelector('.settings-budget-saved');
+    expect(marker).not.toBeNull();
+    expect(marker.textContent).toBe('Saved');
+    // The marker sits inside the Groceries row, right next to the edited input.
+    expect(marker.closest('.settings-budget-row').textContent).toContain('Groceries');
+  });
+
+  it('flashes "Cleared" on the row when the Clear button is used', async () => {
+    const api = makeApi({
+      getBudgets: vi.fn().mockResolvedValue(synthBudgets()),
+      putBudgets: vi.fn().mockResolvedValue(synthBudgets({})),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const clear = document.querySelector('.settings-budget-clear[aria-label="Clear budget for Groceries"]');
+    clear.click();
+    await tick();
+
+    const marker = document.querySelector('.settings-budget-saved');
+    expect(marker).not.toBeNull();
+    expect(marker.textContent).toBe('Cleared');
+  });
+
   it('calls putBudgets with null when the input is cleared to empty', async () => {
     const api = makeApi({
       getBudgets: vi.fn().mockResolvedValue(synthBudgets()),

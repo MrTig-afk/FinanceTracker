@@ -2391,6 +2391,14 @@ a.nav-item {
   gap: 6px;
 }
 
+/* Inline per-row confirmation ("Saved" / "Cleared") next to the budget input —
+   the shared status line below the list sits off-screen on the phone. */
+.settings-budget-saved {
+  color: #4caf50;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
 .settings-status {
   font-size: 0.875rem;
   color: var(--muted);

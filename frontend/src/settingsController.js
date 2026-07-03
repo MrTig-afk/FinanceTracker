@@ -186,7 +186,16 @@ export function createSettings({ root = document, api } = {}) {
 
   // --- Monthly budgets ------------------------------------------------------
 
-  function _renderBudgets(data) {
+  // Timer for the per-row saved marker so a rapid second save replaces the flash.
+  let _budgetSavedTimer = null;
+
+  /**
+   * Render the budgets editor. `confirm` = {name, text} flashes an inline marker
+   * ("Saved" / "Cleared") on that category's row for a few seconds — the shared
+   * status line below the list sits off-screen on the phone, so confirmation has
+   * to appear next to the input the owner just used.
+   */
+  function _renderBudgets(data, confirm = null) {
     if (!budgetWrap) return;
     budgetWrap.textContent = '';
     const categories = data && Array.isArray(data.categories) ? data.categories : [];
@@ -232,7 +241,8 @@ export function createSettings({ root = document, api } = {}) {
         try {
           const updated = await _api.putBudgets(payload);
           _setStatus(budgetStatus, 'Saved.');
-          _renderBudgets(updated); // server-canonical formatting + clear-button state
+          // server-canonical formatting + clear-button state + inline confirmation
+          _renderBudgets(updated, { name, text: raw === '' ? 'Cleared' : 'Saved' });
         } catch {
           input.value = previous; // revert the optimistic edit
           _setStatus(budgetStatus, 'Could not save that budget.', true);
@@ -244,7 +254,7 @@ export function createSettings({ root = document, api } = {}) {
         _setStatus(budgetStatus, '');
         try {
           const updated = await _api.putBudgets({ budgets: { [name]: null } });
-          _renderBudgets(updated);
+          _renderBudgets(updated, { name, text: 'Cleared' });
         } catch {
           clear.disabled = false;
           _setStatus(budgetStatus, 'Could not save that budget.', true);
@@ -254,6 +264,20 @@ export function createSettings({ root = document, api } = {}) {
       row.appendChild(label);
       row.appendChild(input);
       row.appendChild(clear);
+
+      if (confirm && confirm.name === name) {
+        const saved = doc.createElement('span');
+        saved.className = 'settings-budget-saved';
+        saved.setAttribute('role', 'status');
+        saved.textContent = confirm.text;
+        row.appendChild(saved);
+        if (_budgetSavedTimer !== null) clearTimeout(_budgetSavedTimer);
+        _budgetSavedTimer = setTimeout(() => {
+          _budgetSavedTimer = null;
+          saved.remove();
+        }, 2500);
+      }
+
       budgetWrap.appendChild(row);
     }
   }
