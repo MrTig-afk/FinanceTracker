@@ -221,6 +221,15 @@ Newest additions (v6), all local heuristics over data already on your machine â€
 - **Budget alerts**: per-category monthly budgets set in Settings, checked after each run, fired once per category per month at 80% and 100% through the normal notification channels. Alert payloads carry only a category name and a percent â€” never amounts or descriptions.
 - **Subscription watch**: recurring-merchant detection that flags a new subscription appearing, a price change on an existing one, or an expected income deposit that did not arrive.
 
+## Roadmap (v7, in progress)
+
+1. **Automatic database backups**: the always-on supervisor snapshots the SQLite database weekly (SQLite online-backup API, safe while the app runs), keeping a rolling set of local copies.
+2. **Transfers badge**: an unseen-count badge on the Transfers nav item, so newly netted pairs are visible until reviewed.
+3. **Balance trajectory**: month-end closing balances (already derived from each CSV, currently discarded) stored per bank and drawn as a net-position line chart in Trends.
+4. **Categoriser scorecard**: a monthly accuracy card in Settings built from recategorisation events (categories and timestamps only), showing whether the categoriser improves over time.
+
+Same rules as always: everything local, synthetic-data tests, nothing new sent off-machine.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
