@@ -62,3 +62,6 @@ service/run-all.ps1
 SETUP.md
 frontend/README.md
 service/README.md
+
+# ── Portfolio screenshots (synthetic data, but assets stay local) ──
+screenshots/
