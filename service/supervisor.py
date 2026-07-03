@@ -25,6 +25,16 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    from service import backup
+except ImportError:  # run directly as a script: service/ is sys.path[0]
+    try:
+        import backup
+    except Exception:  # noqa: BLE001 — a broken backup module must never stop the supervisor
+        backup = None  # type: ignore[assignment]
+except Exception:  # noqa: BLE001 — a broken backup module must never stop the supervisor
+    backup = None  # type: ignore[assignment]
+
 REPO = Path(__file__).resolve().parent.parent
 PYTHON = REPO / "venv" / "Scripts" / "python.exe"
 DIST = REPO / "frontend" / "dist"
@@ -114,6 +124,13 @@ def main() -> None:
                 note(sup_log, f"{name} not listening on {port}; starting")
                 children[name] = spawn(args, log_name)
                 time.sleep(3)
+        try:
+            if backup is not None:
+                message = backup.run_backup_if_due(REPO)
+                if message:
+                    note(sup_log, message)
+        except Exception as exc:  # backups must never break the supervisor loop
+            note(sup_log, f"backup failed: {exc!r}")
         time.sleep(CHECK_INTERVAL)
 
 

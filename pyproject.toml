@@ -6,6 +6,6 @@ requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["backend"]
+testpaths = ["backend", "service"]
 python_files = ["test_*.py"]
 addopts = "-q"
