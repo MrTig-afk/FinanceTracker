@@ -18,7 +18,7 @@ const SEARCH_HTML = `
   <div class="search-toolbar">
     <input id="search-input" type="search" class="search-input" />
   </div>
-  <p id="search-message" class="message-banner"></p>
+  <p id="search-message" class="status-line"></p>
   <section id="search-results-card" class="card" hidden>
     <div id="search-results" class="cat-drawer-body"></div>
   </section>

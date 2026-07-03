@@ -423,6 +423,17 @@ a.nav-item {
   transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
 }
 
+/* Quiet status line (hint / count / empty text in Search + Transfers). Unlike
+   .message-banner this is NOT an alert: no background, no border — just muted
+   text, so an always-visible status never reads as a warning box. */
+.status-line {
+  margin: 2px 0 10px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-align: center;
+  transition: color 0.3s ease;
+}
+
 /* ── Overview grid ───────────────────────────────────────── */
 .overview-grid {
   display: grid;

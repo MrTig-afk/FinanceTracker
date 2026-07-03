@@ -15,7 +15,7 @@ import { formatCurrency } from './summary.js';
 // ---------------------------------------------------------------------------
 
 const TRANSFERS_HTML = `
-  <p id="transfers-message" class="message-banner"></p>
+  <p id="transfers-message" class="status-line"></p>
   <section id="transfers-card" class="card" hidden>
     <div id="transfers-list" class="cat-drawer-body"></div>
   </section>
