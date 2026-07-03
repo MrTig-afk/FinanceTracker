@@ -1953,3 +1953,145 @@ class TestCorrections:
             )
             assert store.transaction_description(999999) is None
             assert store.transaction_description("no-such-fingerprint") is None
+
+
+# ---------------------------------------------------------------------------
+# TestTransferExclusionFromAggregates — v6 internal-transfer netting (D3/D13).
+# Rows tagged 'Transfer' are excluded from spending aggregates (summary,
+# month_view, year_view, category_trend) but KEPT by account_balances and
+# transactions_for_month. All fixtures SYNTHETIC; :memory: only.
+# ---------------------------------------------------------------------------
+
+_COMMBANK_V = Bank.COMMBANK.value
+_WESTPAC_V = Bank.WESTPAC.value
+
+
+def _insert_txn(store, *, d, amount, bank, desc="SYNTH TXN", category=None, fp=None):
+    """Insert one synthetic transaction row; return its id."""
+    fp = fp or f"xfp-{d}-{amount}-{bank}-{desc}"
+    cur = store.conn.execute(
+        "INSERT INTO transactions"
+        "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+        " VALUES (?,?,?,?,?,?,?,'t')",
+        (fp, d, desc, amount, bank, category, d[:7]),
+    )
+    store.conn.commit()
+    return cur.lastrowid
+
+
+class TestTransferExclusionFromAggregates:
+    def test_summary_excludes_tagged_transfer_rows(self):
+        with Store(":memory:") as store:
+            _insert_txn(store, d="2026-06-01", amount="-50.00", bank=_COMMBANK_V,
+                        desc="SYNTH GROCER", category="Groceries")
+            _insert_txn(store, d="2026-06-02", amount="-500.00", bank=_COMMBANK_V,
+                        desc="SYNTH OUT")
+            _insert_txn(store, d="2026-06-03", amount="500.00", bank=_WESTPAC_V,
+                        desc="SYNTH IN")
+            store.detect_transfers()
+
+            summary = store.summary("2026-06")
+            assert "Transfer" not in summary["totals"]
+            assert summary["totals"] == {"Groceries": "-50.00"}
+            assert summary["net"] == "-50.00"
+            assert summary["count"] == 1  # only the non-transfer row
+
+    def test_month_view_excludes_transfers(self):
+        with Store(":memory:") as store:
+            _insert_txn(store, d="2026-06-01", amount="-50.00", bank=_COMMBANK_V,
+                        desc="SYNTH GROCER", category="Groceries")
+            _insert_txn(store, d="2026-06-02", amount="-500.00", bank=_COMMBANK_V, desc="SYNTH OUT")
+            _insert_txn(store, d="2026-06-03", amount="500.00", bank=_WESTPAC_V, desc="SYNTH IN")
+            store.detect_transfers()
+
+            mv = store.month_view("2026-06")
+            assert "Transfer" not in mv["totals"]
+            assert mv["totals"] == {"Groceries": "-50.00"}
+            assert mv["net"] == "-50.00"
+            assert mv["count"] == 1
+            assert all(c["category"] != "Transfer" for c in mv["comparison"])
+
+    def test_year_view_excludes_transfers(self):
+        with Store(":memory:") as store:
+            _insert_txn(store, d="2026-06-01", amount="-50.00", bank=_COMMBANK_V,
+                        desc="SYNTH GROCER", category="Groceries")
+            _insert_txn(store, d="2026-06-02", amount="-500.00", bank=_COMMBANK_V, desc="SYNTH OUT")
+            _insert_txn(store, d="2026-06-03", amount="500.00", bank=_WESTPAC_V, desc="SYNTH IN")
+            store.detect_transfers()
+
+            yv = store.year_view("2026")
+            assert "Transfer" not in yv["totals"]
+            assert yv["totals"] == {"Groceries": "-50.00"}
+            assert yv["count"] == 1
+
+    def test_category_trend_never_lists_transfer_series(self):
+        with Store(":memory:") as store:
+            _insert_txn(store, d="2026-06-01", amount="-50.00", bank=_COMMBANK_V,
+                        desc="SYNTH GROCER", category="Groceries")
+            _insert_txn(store, d="2026-06-02", amount="-500.00", bank=_COMMBANK_V, desc="SYNTH OUT")
+            _insert_txn(store, d="2026-06-03", amount="500.00", bank=_WESTPAC_V, desc="SYNTH IN")
+            store.detect_transfers()
+
+            trend = store.category_trend(months=1, end_month="2026-06")
+            cats = {s["category"] for s in trend["series"]}
+            assert "Transfer" not in cats
+            assert "Groceries" in cats
+
+    def test_boundary_pair_contributes_to_neither_months_spend(self):
+        with Store(":memory:") as store:
+            # Transfer straddles May/June (within 3 days); both legs tagged.
+            _insert_txn(store, d="2026-05-31", amount="-500.00", bank=_COMMBANK_V, desc="SYNTH OUT")
+            _insert_txn(store, d="2026-06-02", amount="500.00", bank=_WESTPAC_V, desc="SYNTH IN")
+            # A genuine spend in each month to prove the months are otherwise non-empty.
+            _insert_txn(store, d="2026-05-15", amount="-20.00", bank=_COMMBANK_V,
+                        desc="SYNTH MAY", category="Groceries")
+            _insert_txn(store, d="2026-06-15", amount="-30.00", bank=_COMMBANK_V,
+                        desc="SYNTH JUN", category="Groceries")
+            store.detect_transfers()
+
+            may = store.summary("2026-05")
+            jun = store.summary("2026-06")
+            assert may["totals"] == {"Groceries": "-20.00"}
+            assert jun["totals"] == {"Groceries": "-30.00"}
+            assert "Transfer" not in may["totals"]
+            assert "Transfer" not in jun["totals"]
+
+    def test_account_balances_unaffected_by_tagging(self):
+        with Store(":memory:") as store:
+            _insert_txn(store, d="2026-06-01", amount="-500.00", bank=_COMMBANK_V,
+                        desc="SYNTH OUT", fp="b1")
+            # Give the balance chain so account_balances derives a figure.
+            store.conn.execute("UPDATE transactions SET balance='500.00' WHERE txn_fingerprint='b1'")
+            _insert_txn(store, d="2026-06-02", amount="500.00", bank=_WESTPAC_V,
+                        desc="SYNTH IN", fp="b2")
+            store.conn.execute("UPDATE transactions SET balance='1500.00' WHERE txn_fingerprint='b2'")
+            store.conn.commit()
+
+            before = store.account_balances("2026-06")
+            store.detect_transfers()
+            after = store.account_balances("2026-06")
+            assert before == after  # tagging does not change balances (money moved)
+
+    def test_transactions_for_month_still_includes_transfer_rows(self):
+        with Store(":memory:") as store:
+            _insert_txn(store, d="2026-06-02", amount="-500.00", bank=_COMMBANK_V, desc="SYNTH OUT")
+            _insert_txn(store, d="2026-06-03", amount="500.00", bank=_WESTPAC_V, desc="SYNTH IN")
+            store.detect_transfers()
+
+            rows = store.transactions_for_month("2026-06")
+            cats = [r.category for r in rows]
+            assert cats.count("Transfer") == 2  # both legs still on the Excel sheet
+            assert len(rows) == 2
+
+    def test_reset_all_data_clears_transfer_pairs(self):
+        with Store(":memory:") as store:
+            _insert_txn(store, d="2026-06-02", amount="-500.00", bank=_COMMBANK_V, desc="SYNTH OUT")
+            _insert_txn(store, d="2026-06-03", amount="500.00", bank=_WESTPAC_V, desc="SYNTH IN")
+            store.detect_transfers()
+            (before,) = store.conn.execute("SELECT COUNT(*) FROM transfer_pairs").fetchone()
+            assert before == 1
+
+            counts = store.reset_all_data()
+            assert counts["transfer_pairs"] == 1
+            (after,) = store.conn.execute("SELECT COUNT(*) FROM transfer_pairs").fetchone()
+            assert after == 0

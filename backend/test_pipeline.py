@@ -1560,3 +1560,149 @@ class TestRetryUncategorised:
             assert len(store.uncategorised()) == 1
         finally:
             store.close()
+
+
+# ---------------------------------------------------------------------------
+# TestInternalTransferNetting — v6 feature 2 (Layer 2.5, LOCAL, no LLM).
+#
+# A matched cross-bank transfer pair is tagged 'Transfer' BEFORE categorisation,
+# so its two legs never enter the sanitised off-machine payload (BLOCKING privacy
+# check) and are excluded from spending aggregates. All fixtures SYNTHETIC.
+# ---------------------------------------------------------------------------
+
+# CommBank: a $500 transfer OUT plus an ordinary grocery spend.
+_XFER_CB_MIXED = (
+    "01/06/2026,-500.00,SYNTHXFEROUT,1000.00\n"
+    "01/06/2026,-72.40,SYNTH GROCER,927.60\n"
+).encode("utf-8")
+
+# Westpac: the matching $500 credit IN (split debit/credit; credit column positive).
+_XFER_WP_MIXED = (
+    "Bank Account,Date,Narrative,Debit Amount,Credit Amount,Balance,Categories,Serial\n"
+    "748007654321,02/06/2026,SYNTHXFERIN,,500.00,3000.00,,\n"
+).encode("utf-8")
+
+# Transfer-only upload: exactly the two legs, nothing else.
+_XFER_CB_ONLY = "01/06/2026,-500.00,SYNTHXFEROUT,1000.00\n".encode("utf-8")
+_XFER_WP_ONLY = (
+    "Bank Account,Date,Narrative,Debit Amount,Credit Amount,Balance,Categories,Serial\n"
+    "748007654321,02/06/2026,SYNTHXFERIN,,500.00,3000.00,,\n"
+).encode("utf-8")
+
+
+def _xfer_mixed_uploads() -> list[UploadedFile]:
+    return [
+        UploadedFile("commbank.csv", Bank.COMMBANK, _XFER_CB_MIXED),
+        UploadedFile("westpac.csv", Bank.WESTPAC, _XFER_WP_MIXED),
+    ]
+
+
+def _xfer_only_uploads() -> list[UploadedFile]:
+    return [
+        UploadedFile("commbank.csv", Bank.COMMBANK, _XFER_CB_ONLY),
+        UploadedFile("westpac.csv", Bank.WESTPAC, _XFER_WP_ONLY),
+    ]
+
+
+class TestInternalTransferNetting:
+    def test_pair_detected_and_excluded_from_llm_payload(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        report = run_pipeline(
+            _xfer_mixed_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+
+        # One transfer pair netted.
+        assert report.transfer_pairs == 1
+        assert report.new_txns == 3  # 2 CommBank + 1 Westpac
+
+        # BLOCKING privacy check: neither transfer leg reaches the analyser payload.
+        blob = " ".join(fake.received_user_prompts)
+        assert "SYNTHXFEROUT" not in blob
+        assert "SYNTHXFERIN" not in blob
+        # Exactly the one non-transfer row was sent off-machine.
+        total_items = sum(len(json.loads(p)) for p in fake.received_user_prompts)
+        assert total_items == 1
+
+        # Both legs stored as 'Transfer'; the grocer row categorised normally.
+        cats = {
+            r["description"]: r["category"]
+            for r in store.conn.execute("SELECT description, category FROM transactions")
+        }
+        store.close()
+        assert cats["SYNTHXFEROUT"] == "Transfer"
+        assert cats["SYNTHXFERIN"] == "Transfer"
+        assert cats["SYNTH GROCER"] == "Groceries"
+
+    def test_transfer_rows_excluded_from_summary_totals(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        run_pipeline(
+            _xfer_mixed_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        summary = store.summary("2026-06")
+        store.close()
+        assert "Transfer" not in summary["totals"]
+        assert summary["totals"] == {"Groceries": "-72.40"}
+        assert summary["count"] == 1
+
+    def test_rerun_same_bytes_is_noop_zero_pairs_no_llm(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        uploads = _xfer_mixed_uploads()
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        calls_after_first = fake.call_count
+
+        second = run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        assert second.noop is True
+        assert second.transfer_pairs == 0
+        assert fake.call_count == calls_after_first  # zero further LLM calls
+
+    def test_transfer_only_upload_zero_llm_but_workbook_rebuilt(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        report = run_pipeline(
+            _xfer_only_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+
+        # Payload empty -> analyser never called (empty-payload short-circuit).
+        assert fake.call_count == 0
+        assert report.transfer_pairs == 1
+        assert report.noop is False
+        # The month's workbook is still rebuilt via the extra_months path.
+        assert report.year_month == "2026-06"
+        assert report.excel_path is not None
+        import pathlib
+        assert pathlib.Path(report.excel_path).exists()
