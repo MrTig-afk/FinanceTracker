@@ -30,6 +30,8 @@ POST /reset     Wipe all transaction data (confirm=='RESET'); keep device + pref
 GET  /categoriser/status  configured bool + uncategorised_count (no network).
 POST /categoriser/test    Live minimal OpenRouter probe (no txn data; never raises).
 POST /categoriser/retry   Re-run categorisation over NULL-category rows (no re-upload).
+GET  /categoriser/scorecard  Monthly categoriser accuracy series (?months=1-24,
+                default 6; categories + timestamps only, no transaction content).
 GET  /corrections         List stored corrections + Feature B enabled flag.
 DELETE /corrections/{cid} Remove one stored correction by id.
 
@@ -407,7 +409,8 @@ async def summary(
         month   — optional "YYYY-MM".  Omit to get the latest month.
 
     Returns the compact shape the dashboard pie reads:
-        { "year_month": "YYYY-MM"|null, "totals": {...}, "net": "str", "count": N }
+        { "year_month": "YYYY-MM"|null, "totals": {...}, "net": "str", "count": N,
+          "transfers_unseen": N }   # global unseen-transfer count, not month-scoped
 
     Note: amounts are str(Decimal), never float.
     """
@@ -520,6 +523,19 @@ async def untag_transfer(pair_id: int):
     return response
 
 
+@app.post("/transfers/seen")
+async def transfers_seen():
+    """Mark the Transfers view as seen, clearing the unseen-count nav badge.
+
+    LOCAL-ONLY settings write on the owner's own store — same local-serve posture as
+    /transfers/{pair_id}/untag. Stamps 'transfers_last_viewed_at' with the local UTC
+    clock; nothing financial changes, so no budget/subscription checks run and nothing
+    is ever sent off-machine. No body, no params. Always 200, idempotent.
+    """
+    last = app.state.store.mark_transfers_seen()
+    return {"ok": True, "last_viewed_at": last, "transfers_unseen": 0}
+
+
 # ---------------------------------------------------------------------------
 # GET /month  (v2 Pass 1 — monthly breakdown + month-over-month comparison)
 # ---------------------------------------------------------------------------
@@ -595,6 +611,23 @@ async def trends(
 
 
 # ---------------------------------------------------------------------------
+# GET /balances  (v7 — monthly closing-balance history / net position)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/balances")
+async def balances():
+    """Monthly closing-balance series per bank + combined net position.
+
+    LOCAL, read-only serve of the owner's own store — same posture as /summary.
+    Balances are SENSITIVE: this data is never sent off-machine, never enters
+    the sanitised categoriser payload, and never appears in notification copy.
+    Amounts are str(Decimal), never float.
+    """
+    return app.state.store.balance_series()
+
+
+# ---------------------------------------------------------------------------
 # POST /reclassify  (small-fuel-stop dining rule; local-only category edit)
 # ---------------------------------------------------------------------------
 
@@ -662,6 +695,11 @@ async def category_override(body: CategoryOverrideIn):
          even when on, if the description scrubs to nothing safe the category is still
          set but NO correction is stored — an un-sanitisable string is never persisted
          or sent off-machine.
+      4. Log one override_events row for the categoriser scorecard. This event write
+         is UNGATED by ``corrections_enabled`` (it stores only the from/to categories
+         + a timestamp — nothing sensitive), and is skipped for a no-op override
+         (from == to). A NULL from_category means the row was previously
+         uncategorised (drawer remediation), excluded from the accuracy numerator.
 
     LOCAL-ONLY edit of the owner's own store — same local-serve posture as
     /reclassify. Returns the updated month summary so the dashboard can re-render.
@@ -681,16 +719,26 @@ async def category_override(body: CategoryOverrideIn):
     if raw is None:
         raise HTTPException(status_code=404, detail="transaction not found")
 
+    # Capture the pre-write category ONCE: it drives both the transfer-leg guard and
+    # the scorecard event's from_category (None here == the row was uncategorised).
+    from_category = store.transaction_category(key)
+
     # Transfer legs are managed by their pair record: overriding one leg would leave
     # the pair asymmetric, and a later untag would then restore a stale category.
     # Reject with 409 — the owner untags via POST /transfers/{id}/untag first.
-    if store.transaction_category(key) == TRANSFER_CATEGORY:
+    if from_category == TRANSFER_CATEGORY:
         raise HTTPException(
             status_code=409, detail="transaction is a transfer leg; untag the pair first"
         )
 
     # Set the category (local write only).
     store.set_categories({key: body.category})
+
+    # Scorecard event — UNGATED by corrections_enabled. The event log stores only
+    # categories + a timestamp (no description, amount, row id, or fingerprint), so
+    # the learning opt-in's privacy rationale does not apply; the scorecard must
+    # measure accuracy for all owners. No-op overrides skip inside the store method.
+    store.record_override_event(from_category, body.category)
 
     # Scrub the raw description and record the correction — but ONLY when the owner
     # has opted in (corrections_enabled, default OFF) AND it scrubs to something safe
@@ -1103,6 +1151,20 @@ async def categoriser_retry():
     ``{"ok": False, ..., "detail": "categoriser unavailable"}`` with HTTP 200.
     """
     return retry_uncategorised(app.state.store)
+
+
+@app.get("/categoriser/scorecard")
+async def categoriser_scorecard(
+    months: Annotated[int, Query(description="window size, default 6")] = 6,
+):
+    """Monthly categoriser accuracy series (LOCAL, read-only; same posture as
+    /summary). Categories and timestamps only — no transaction content, nothing
+    off-machine. Validation copies /trends: 400 on months < 1; the store clamps the
+    upper bound to 24.
+    """
+    if months < 1:
+        raise HTTPException(status_code=400, detail="months must be >= 1")
+    return app.state.store.categoriser_scorecard(months=months)
 
 
 # ---------------------------------------------------------------------------

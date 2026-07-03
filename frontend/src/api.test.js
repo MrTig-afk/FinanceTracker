@@ -10,6 +10,7 @@ import {
   fetchMonth,
   fetchYear,
   fetchTrends,
+  fetchBalances,
   fetchStatus,
   postReclassify,
   fetchCategoryContext,
@@ -18,6 +19,7 @@ import {
   fetchSearch,
   fetchTransfers,
   postTransferUntag,
+  postTransfersSeen,
   postCategoryOverride,
   postPushSubscribe,
   postPushUnsubscribe,
@@ -25,6 +27,7 @@ import {
   putSettings,
   getBudgets,
   putBudgets,
+  getScorecard,
   getSubscriptions,
   getCorrections,
   deleteCorrection,
@@ -366,6 +369,40 @@ describe('postTransferUntag', () => {
   });
 });
 
+describe('postTransfersSeen', () => {
+  const SEEN_OK = { ok: true, last_viewed_at: '2026-06-02T00:00:00+00:00', transfers_unseen: 0 };
+
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(SEEN_OK));
+    const result = await postTransfersSeen();
+    expect(result).toEqual(SEEN_OK);
+  });
+
+  it('POSTs to /transfers/seen with no body', async () => {
+    const mockFetch = makeOkFetch(SEEN_OK);
+    vi.stubGlobal('fetch', mockFetch);
+    await postTransfersSeen();
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/transfers/seen');
+    expect(options.method).toBe('POST');
+    expect(options.body).toBeUndefined();
+  });
+
+  it('rejects with ApiError carrying the status on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    const err = await postTransfersSeen().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(500);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await postTransfersSeen().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.name).toBe('ApiError');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // postCategoryOverride — manual category correction
 // ---------------------------------------------------------------------------
@@ -613,6 +650,63 @@ describe('fetchTrends', () => {
 });
 
 // ---------------------------------------------------------------------------
+// fetchBalances — net-position closing-balance series (v7 feature 3)
+// ---------------------------------------------------------------------------
+
+const CANNED_BALANCES = {
+  months: ['2026-05', '2026-06'],
+  series: [
+    { bank: 'commbank', values: ['1000.00', '1010.00'] },
+    { bank: 'westpac', values: ['500.00', null] },
+  ],
+  net: ['1500.00', null],
+};
+
+describe('fetchBalances', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_BALANCES));
+    const result = await fetchBalances();
+    expect(result).toEqual(CANNED_BALANCES);
+  });
+
+  it('hits ${API_BASE}/balances with no query string', async () => {
+    const mockFetch = makeOkFetch(CANNED_BALANCES);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchBalances();
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toBe(`${API_BASE}/balances`);
+    expect(calledUrl).not.toContain('?');
+  });
+
+  it('sends an Accept: application/json header', async () => {
+    const mockFetch = makeOkFetch(CANNED_BALANCES);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchBalances();
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+  });
+
+  it('rejects with ApiError on a non-200 response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    await expect(fetchBalances()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it('ApiError carries the HTTP status code from the response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(404));
+    const err = await fetchBalances().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchBalances().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.name).toBe('ApiError');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // postReclassify — apply/revert the small-fuel-stop rule
 // ---------------------------------------------------------------------------
 
@@ -829,6 +923,53 @@ describe('getBudgets', () => {
   it('rejects with ApiError (not raw TypeError) on network failure', async () => {
     vi.stubGlobal('fetch', makeNetworkFailFetch());
     const err = await getBudgets().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.name).toBe('ApiError');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getScorecard — v7 categoriser accuracy scorecard (read-only)
+// ---------------------------------------------------------------------------
+
+const CANNED_SCORECARD = {
+  window: 3,
+  months: [
+    { month: '2026-05', auto_categorised: 0, corrected: 0, accuracy_pct: null },
+    { month: '2026-06', auto_categorised: 103, corrected: 4, accuracy_pct: 96 },
+    { month: '2026-07', auto_categorised: 0, corrected: 0, accuracy_pct: null },
+  ],
+  current: { month: '2026-07', auto_categorised: 0, corrected: 0, accuracy_pct: null },
+};
+
+describe('getScorecard', () => {
+  it('GETs /categoriser/scorecard and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch(CANNED_SCORECARD);
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await getScorecard();
+    expect(result).toEqual(CANNED_SCORECARD);
+    expect(mockFetch.mock.calls[0][0]).toContain('/categoriser/scorecard');
+  });
+
+  it('sends an Accept: application/json header and no body', async () => {
+    const mockFetch = makeOkFetch(CANNED_SCORECARD);
+    vi.stubGlobal('fetch', mockFetch);
+    await getScorecard();
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+    expect(options.body).toBeUndefined();
+  });
+
+  it('rejects with ApiError carrying the status on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    const err = await getScorecard().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(500);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await getScorecard().catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(err.name).toBe('ApiError');
   });

@@ -36,6 +36,10 @@ const SETTINGS_HTML = `
   <input id="settings-corrections-toggle" type="checkbox" />
   <div id="settings-corrections-list"></div>
   <p id="settings-corrections-status" role="status"></p>
+
+  <p id="settings-scorecard-headline">Loading...</p>
+  <div id="settings-scorecard-months"></div>
+  <p id="settings-scorecard-status" role="status"></p>
 `;
 
 // SYNTHETIC settings + corrections fixtures.
@@ -84,6 +88,9 @@ function makeApi(overrides = {}) {
     postCategoriserRetry: vi
       .fn()
       .mockResolvedValue({ ok: true, categorised: 2, remaining: 1 }),
+    getScorecard: vi
+      .fn()
+      .mockResolvedValue({ window: 6, months: [], current: null }),
     postReset: vi.fn().mockResolvedValue({ ok: true, cleared: {} }),
     transactionsCsvUrl: vi.fn().mockReturnValue('http://localhost:8000/export/transactions.csv'),
     ...overrides,
@@ -610,6 +617,111 @@ describe('reset danger zone', () => {
 // ---------------------------------------------------------------------------
 // Failure handling — load() never throws
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Categoriser scorecard card (v7 feature 4)
+// ---------------------------------------------------------------------------
+
+// SYNTHETIC scorecard: current month (2026-07) empty, last month WITH data is June.
+function synthScorecard(overrides = {}) {
+  return {
+    window: 3,
+    months: [
+      { month: '2026-05', auto_categorised: 0, corrected: 0, accuracy_pct: null },
+      { month: '2026-06', auto_categorised: 103, corrected: 4, accuracy_pct: 96 },
+      { month: '2026-07', auto_categorised: 0, corrected: 0, accuracy_pct: null },
+    ],
+    current: { month: '2026-07', auto_categorised: 0, corrected: 0, accuracy_pct: null },
+    ...overrides,
+  };
+}
+
+describe('categoriser scorecard card', () => {
+  it('headline shows the latest month WITH data even when the current month is empty', async () => {
+    const api = makeApi({ getScorecard: vi.fn().mockResolvedValue(synthScorecard()) });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    expect(document.getElementById('settings-scorecard-headline').textContent).toBe(
+      'June: 96% - 4 corrections out of 103',
+    );
+  });
+
+  it('renders one row only for months with auto_categorised > 0', async () => {
+    const api = makeApi({ getScorecard: vi.fn().mockResolvedValue(synthScorecard()) });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const rows = document.querySelectorAll('.settings-scorecard-row');
+    expect(rows.length).toBe(1); // only 2026-06 has data
+    // Short month + year (D-9 rows). The exact abbreviation ("Jun" vs "June") is an
+    // Intl/ICU-locale detail; assert the row carries the month name and its year.
+    expect(rows[0].querySelector('.settings-scorecard-month').textContent).toMatch(
+      /^Jun(e)? 2026$/,
+    );
+    expect(rows[0].querySelector('.settings-scorecard-pct').textContent).toBe('96%');
+    expect(rows[0].querySelector('.settings-scorecard-count').textContent).toBe(
+      '4 of 103 corrected',
+    );
+  });
+
+  it('uses the singular "1 correction" wording when corrected === 1', async () => {
+    const api = makeApi({
+      getScorecard: vi.fn().mockResolvedValue({
+        window: 1,
+        months: [{ month: '2026-06', auto_categorised: 50, corrected: 1, accuracy_pct: 98 }],
+        current: { month: '2026-06', auto_categorised: 50, corrected: 1, accuracy_pct: 98 },
+      }),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    expect(document.getElementById('settings-scorecard-headline').textContent).toBe(
+      'June: 98% - 1 correction out of 50',
+    );
+  });
+
+  it('renders the empty state and no rows when months is empty', async () => {
+    const api = makeApi({
+      getScorecard: vi.fn().mockResolvedValue({ window: 6, months: [], current: null }),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    expect(document.getElementById('settings-scorecard-headline').textContent).toBe(
+      'No categorised transactions yet.',
+    );
+    expect(document.querySelectorAll('.settings-scorecard-row').length).toBe(0);
+  });
+
+  it('renders empty state + error status when getScorecard fails, without throwing', async () => {
+    const api = makeApi({ getScorecard: vi.fn().mockRejectedValue(new Error('down')) });
+    controller = createSettings({ root: document, api });
+
+    await expect(controller.load()).resolves.toBeUndefined();
+
+    expect(document.getElementById('settings-scorecard-headline').textContent).toBe(
+      'No categorised transactions yet.',
+    );
+    expect(document.querySelectorAll('.settings-scorecard-row').length).toBe(0);
+    expect(document.getElementById('settings-scorecard-status').textContent).toContain(
+      'Could not load',
+    );
+  });
+
+  it('sets scorecard text via textContent only (no HTML injection)', async () => {
+    const api = makeApi({ getScorecard: vi.fn().mockResolvedValue(synthScorecard()) });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const headline = document.getElementById('settings-scorecard-headline');
+    const monthsBox = document.getElementById('settings-scorecard-months');
+    // textContent-only render: the month container holds element rows, no stray markup
+    // beyond the spans the controller creates.
+    expect(headline.querySelectorAll('*').length).toBe(0);
+    expect(monthsBox.querySelectorAll('.settings-scorecard-row span').length).toBe(3);
+  });
+});
 
 describe('load() resilience', () => {
   it('does not throw and shows error lines when every fetch rejects', async () => {

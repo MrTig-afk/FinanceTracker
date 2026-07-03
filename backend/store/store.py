@@ -17,7 +17,9 @@ SQLITE_PATH is read from .env via python-dotenv; never hardcoded anywhere.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -558,6 +560,28 @@ class Store:
         return cursor.rowcount
 
     # ------------------------------------------------------------------
+    # Categoriser scorecard — manual-recategorisation event log (v7 feature 4)
+    # ------------------------------------------------------------------
+
+    def record_override_event(self, from_category: str | None, to_category: str) -> None:
+        """Append one category-override event for the accuracy scorecard.
+
+        Stores ONLY (created_at, from_category, to_category) — never a description,
+        amount, row id, or fingerprint. from_category None = the row was
+        uncategorised (drawer remediation; excluded from accuracy math downstream).
+        No-op when from_category == to_category (nothing was re-categorised).
+        Commits before returning. LOCAL-ONLY write; no network.
+        """
+        if from_category == to_category:  # D-3: no-op override, not a signal
+            return
+        self.conn.execute(
+            "INSERT INTO override_events(created_at, from_category, to_category) "
+            "VALUES (?, ?, ?)",
+            (_utc_now_iso(), from_category, to_category),
+        )
+        self.conn.commit()
+
+    # ------------------------------------------------------------------
     # App settings — key/value preferences store (LOCAL-ONLY, owner's device)
     # ------------------------------------------------------------------
 
@@ -932,6 +956,107 @@ class Store:
         return updated
 
     # ------------------------------------------------------------------
+    # Net-position balance history (v7 — local-only closing-balance snapshots)
+    # ------------------------------------------------------------------
+
+    def record_month_balances(self, months: Iterable[str]) -> int:
+        """Snapshot each month's per-bank closing balance into the balances table.
+
+        LOCAL-ONLY (SENSITIVE data; zero network code). For each 'YYYY-MM' in
+        `months`, re-derives opening/closing from ALL stored rows via
+        account_balances(ym) and upserts one row per bank whose closing is
+        available. A None closing (the graceful "unavailable" fallback) writes
+        NOTHING and never erases a previously stored value. Idempotent: an
+        unchanged closing is not rewritten (derived_at untouched). Commits once.
+        Returns the count of rows actually inserted or updated.
+
+        Upsert semantics (DECISION): re-derive from ALL stored rows for the month,
+        then last-write-wins on change; failure never erases. account_balances
+        derives closing as the balance of the chronologically-LAST transaction in
+        the month via the running-balance chain, so "latest-dated transaction wins"
+        is already implemented by the derivation itself. A later upload covering the
+        same month re-derives over the enlarged row set and overwrites (correct by
+        construction); an inconsistent chain yields None so we write nothing and KEEP
+        the last good stored value; an identical re-derivation trips the WHERE guard
+        and writes 0 rows (idempotent, derived_at preserved).
+        """
+        total = 0
+        now = _utc_now_iso()
+        for ym in months:
+            if not re.match(r"^\d{4}-\d{2}$", ym):
+                continue  # defensive; real inputs come from Transaction.date
+            per_bank = self.account_balances(ym)
+            for bank, figures in per_bank.items():
+                closing = figures.get("closing")
+                if closing is None:
+                    continue  # unavailable derivation — write nothing, never erase
+                cursor = self.conn.execute(
+                    """
+                    INSERT INTO balances (bank, year_month, closing_balance, derived_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(bank, year_month) DO UPDATE SET
+                        closing_balance = excluded.closing_balance,
+                        derived_at      = excluded.derived_at
+                    WHERE balances.closing_balance IS NOT excluded.closing_balance
+                    """,
+                    (bank, ym, closing, now),
+                )
+                total += max(cursor.rowcount, 0)
+        self.conn.commit()
+        return total
+
+    def balance_series(self) -> dict:
+        """Monthly closing-balance series per bank + combined net (LOCAL-ONLY,
+        never sent off-machine). All money values str(Decimal) or None; never float.
+
+        `months` is the CONTIGUOUS calendar range from the earliest to the latest
+        stored month, ascending; a bank with no stored row for a month yields None
+        (a gap, never a zero). `series` carries one entry per bank that has >= 1 row,
+        CommBank then Westpac. `net[i]` is non-null ONLY when EVERY bank present in
+        `series` has a non-null value that month (a lone bank would misrepresent net
+        position). Empty table -> {"months": [], "series": [], "net": []}.
+        """
+        rows = self.conn.execute(
+            "SELECT bank, year_month, closing_balance FROM balances"
+        ).fetchall()
+        if not rows:
+            return {"months": [], "series": [], "net": []}
+
+        # bank -> {year_month: closing_balance}
+        by_bank: dict[str, dict[str, str]] = {}
+        for row in rows:
+            by_bank.setdefault(row["bank"], {})[row["year_month"]] = row["closing_balance"]
+
+        all_months = [row["year_month"] for row in rows]
+        min_ym, max_ym = min(all_months), max(all_months)
+        n = (
+            (int(max_ym[:4]) - int(min_ym[:4])) * 12
+            + (int(max_ym[5:7]) - int(min_ym[5:7]))
+            + 1
+        )
+        months = _month_range(max_ym, n)
+
+        series: list[dict] = []
+        for bank in (Bank.COMMBANK.value, Bank.WESTPAC.value):
+            month_map = by_bank.get(bank)
+            if not month_map:
+                continue
+            series.append(
+                {"bank": bank, "values": [month_map.get(m) for m in months]}
+            )
+
+        net: list[str | None] = []
+        for i, _ in enumerate(months):
+            present = [s["values"][i] for s in series]
+            if series and all(v is not None for v in present):
+                total = sum((amount_from_text(v) for v in present), Decimal("0.00"))
+                net.append(str(total))
+            else:
+                net.append(None)
+
+        return {"months": months, "series": series, "net": net}
+
+    # ------------------------------------------------------------------
     # Layer 3: categorise only-new (FR-14)
     # ------------------------------------------------------------------
 
@@ -1297,6 +1422,38 @@ class Store:
             "in": row["prev_category_in"],
         }
 
+    def unseen_transfer_count(self) -> int:
+        """Count ACTIVE transfer pairs created since the owner last opened Transfers.
+
+        Reads the 'transfers_last_viewed_at' app_setting; unset (never viewed) counts
+        ALL active pairs. Comparison is strict (created_at > marker); both values are
+        _utc_now_iso() strings from the same local clock, so string comparison in SQL
+        is correct. Dismissed pairs never count. LOCAL-ONLY read; returns a bare int —
+        no descriptions/amounts. No network.
+        """
+        marker = self.get_setting("transfers_last_viewed_at")
+        if marker is None:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM transfer_pairs WHERE status = 'active'"
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) FROM transfer_pairs "
+                "WHERE status = 'active' AND created_at > ?",
+                (marker,),
+            ).fetchone()
+        return int(row[0])
+
+    def mark_transfers_seen(self) -> str:
+        """Record that the owner has just viewed the Transfers view.
+
+        Sets app_setting 'transfers_last_viewed_at' to _utc_now_iso() and returns the
+        stored value. Idempotent to repeat. LOCAL-ONLY settings write; no network.
+        """
+        now = _utc_now_iso()
+        self.set_setting("transfers_last_viewed_at", now)
+        return now
+
     # ------------------------------------------------------------------
     # Reporting (dashboard / Excel builder)
     # ------------------------------------------------------------------
@@ -1373,6 +1530,7 @@ class Store:
                 "fuel_rule_eligible": 3,  # count of rows subject to the fuel-stop rule
                 "fuel_rule_eligible_amount": "-24.10",  # signed Decimal sum, as str
                 "account_balances": {"commbank": {"opening": "1000.00", "closing": "918.10"}},
+                "transfers_unseen": 2,  # global unseen-transfer count, not month-scoped
             }
         """
         if year_month is None:
@@ -1390,6 +1548,7 @@ class Store:
                 "fuel_rule_eligible": 0,
                 "fuel_rule_eligible_amount": "0.00",
                 "account_balances": {},
+                "transfers_unseen": self.unseen_transfer_count(),
             }
 
         rows = self.conn.execute(
@@ -1419,6 +1578,7 @@ class Store:
             "fuel_rule_eligible": count,
             "fuel_rule_eligible_amount": str(amt),
             "account_balances": self.account_balances(year_month),
+            "transfers_unseen": self.unseen_transfer_count(),
         }
 
     def transactions_for_month(self, year_month: str | None = None) -> list[MonthRow]:
@@ -1902,6 +2062,86 @@ class Store:
             "months_available": len(self.available_months()),
         }
 
+    def categoriser_scorecard(self, months: int = 6) -> dict:
+        """Monthly auto-categorised vs corrected counts + accuracy percent.
+
+        Window: `months` clamped to [1, 24], consecutive calendar months ASCENDING,
+        ending at the CURRENT wall-clock UTC month. LOCAL-ONLY read; zero network.
+
+        Per month:
+          - auto_categorised: COUNT of transactions ingested in that calendar month
+            (substr(created_at,1,7), the INGEST month — not the statement year_month)
+            that hold a non-NULL category at query time.
+          - corrected: COUNT of override_events in that calendar month whose
+            from_category IS NOT NULL. NULL-from events are Uncategorised remediation
+            (assigning a category the LLM never produced), not an LLM error, so they
+            are excluded from the numerator.
+          - accuracy_pct: int 0..100 (a ratio, NOT money, so no str(Decimal) here),
+            ((auto - min(corrected, auto)) / auto * 100) rounded HALF_UP. min() clamps
+            the rare cross-month correction so the percent never goes negative.
+            None when auto_categorised == 0.
+
+        Accepted approximations (small, stable biases):
+          (a) rows manually assigned from Uncategorised are indistinguishable from
+              LLM-categorised rows in the denominator (no row ids in the event log by
+              design), so they slightly inflate auto_categorised;
+          (b) rows later tagged 'Transfer' still count (they WERE auto-categorised
+              first).
+        Retries: a row left NULL by a failed run is excluded until set_categories
+        fills it in, at which point it joins its INGEST month's denominator
+        (created_at is written once, at insert). Re-reads are idempotent; a past
+        month's denominator can only grow as retries succeed, never shrink.
+
+        Returns {"window": clamped, "months": [ascending entries], "current": entry
+        for the current month}. Each entry is {"month", "auto_categorised",
+        "corrected", "accuracy_pct"}.
+        """
+        clamped = max(1, min(24, months))
+        end = _utc_now_iso()[:7]
+        window = _month_range(end, clamped)
+
+        auto_by_month: dict[str, int] = {}
+        for row in self.conn.execute(
+            "SELECT substr(created_at, 1, 7) AS ym, COUNT(*) AS n FROM transactions "
+            "WHERE category IS NOT NULL AND substr(created_at, 1, 7) BETWEEN ? AND ? "
+            "GROUP BY ym",
+            (window[0], window[-1]),
+        ).fetchall():
+            auto_by_month[row["ym"]] = row["n"]
+
+        corrected_by_month: dict[str, int] = {}
+        for row in self.conn.execute(
+            "SELECT substr(created_at, 1, 7) AS ym, COUNT(*) AS n FROM override_events "
+            "WHERE from_category IS NOT NULL AND substr(created_at, 1, 7) BETWEEN ? AND ? "
+            "GROUP BY ym",
+            (window[0], window[-1]),
+        ).fetchall():
+            corrected_by_month[row["ym"]] = row["n"]
+
+        entries = []
+        for ym in window:
+            auto = auto_by_month.get(ym, 0)
+            corrected = corrected_by_month.get(ym, 0)
+            if auto == 0:
+                accuracy_pct = None
+            else:
+                correct = auto - min(corrected, auto)
+                accuracy_pct = int(
+                    (Decimal(correct) / Decimal(auto) * Decimal(100)).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                )
+            entries.append(
+                {
+                    "month": ym,
+                    "auto_categorised": auto,
+                    "corrected": corrected,
+                    "accuracy_pct": accuracy_pct,
+                }
+            )
+
+        return {"window": clamped, "months": entries, "current": entries[-1]}
+
     # ------------------------------------------------------------------
     # Data export + reset (LOCAL-ONLY; owner's own data / device maintenance)
     # ------------------------------------------------------------------
@@ -1943,9 +2183,11 @@ class Store:
         LOCAL-ONLY destructive maintenance op; contains ZERO network code. Returns the
         per-table deleted-row counts ``{"transactions": n, "file_fingerprints": n,
         "corrections": n, "transfer_pairs": n, "budget_alert_fired": n,
-        "subscriptions": n, "subscription_event_fired": n}`` captured BEFORE the
-        delete. budget_alert_fired, subscriptions, and subscription_event_fired are
-        wiped too (all derived from the transaction data being cleared); the budgets
+        "subscriptions": n, "subscription_event_fired": n, "balances": n,
+        "override_events": n}`` captured
+        BEFORE the delete. budget_alert_fired, subscriptions, subscription_event_fired,
+        balances, and override_events are wiped too (all derived from the transaction
+        data being cleared); the budgets
         themselves live in app_settings and are deliberately PRESERVED alongside the
         other owner preferences.
         """
@@ -1971,6 +2213,12 @@ class Store:
             "subscription_event_fired": self.conn.execute(
                 "SELECT COUNT(*) FROM subscription_event_fired"
             ).fetchone()[0],
+            "balances": self.conn.execute(
+                "SELECT COUNT(*) FROM balances"
+            ).fetchone()[0],
+            "override_events": self.conn.execute(
+                "SELECT COUNT(*) FROM override_events"
+            ).fetchone()[0],
         }
 
         # transfer_pairs first: its FK references transactions(id), so it must be
@@ -1984,6 +2232,10 @@ class Store:
         # Subscription state + fired-event slots are likewise derived from the data.
         self.conn.execute("DELETE FROM subscription_event_fired")
         self.conn.execute("DELETE FROM subscriptions")
+        # Balance history is derived from the (now wiped) transaction data.
+        self.conn.execute("DELETE FROM balances")
+        # Categoriser scorecard events are derived from the (now wiped) data.
+        self.conn.execute("DELETE FROM override_events")
 
         # Re-seed category_context to the canonical defaults (same rows as the
         # first-run seed / save_category_context replace-all).

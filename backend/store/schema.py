@@ -105,6 +105,24 @@ CREATE TABLE IF NOT EXISTS subscription_event_fired (
     created_at   TEXT NOT NULL,
     UNIQUE(merchant_key, year_month, event)
 );
+
+CREATE TABLE IF NOT EXISTS balances (
+    bank            TEXT NOT NULL,     -- 'commbank' | 'westpac' (Bank enum values)
+    year_month      TEXT NOT NULL,     -- 'YYYY-MM'
+    closing_balance TEXT NOT NULL,     -- canonical str(Decimal), 2 dp (amount_to_text form)
+    derived_at      TEXT NOT NULL,     -- ISO-8601 UTC (_utc_now_iso())
+    PRIMARY KEY (bank, year_month)
+);
+
+CREATE TABLE IF NOT EXISTS override_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at    TEXT NOT NULL,      -- ISO-8601 UTC (_utc_now_iso())
+    from_category TEXT,               -- NULL = row was uncategorised (remediation)
+    to_category   TEXT NOT NULL
+    -- PRIVACY: categories + timestamp ONLY — never descriptions, amounts,
+    -- row ids, or fingerprints.
+);
+CREATE INDEX IF NOT EXISTS idx_override_created ON override_events(created_at);
 """
 
 # ---------------------------------------------------------------------------

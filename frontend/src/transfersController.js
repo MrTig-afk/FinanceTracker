@@ -5,6 +5,9 @@
  * from spending, each with a "Not a transfer" button that dismisses the match and
  * restores the two legs' categories (POST /transfers/{id}/untag).
  *
+ * Opening the view also marks it seen (POST /transfers/seen, fire-and-forget) so the
+ * unseen-count nav badge clears; an optimistic onSeen() clears the pill synchronously.
+ *
  * PRIVACY: descriptions/amounts come from the owner's OWN local backend and are
  * rendered only in the owner's own client — nothing here is ever sent off-machine.
  * Rows are built via buildRowMain (textContent only), so a description can never
@@ -12,7 +15,7 @@
  * _on/_listeners/destroy, fixed safe error strings, stale-guard token on load).
  */
 
-import { fetchTransfers, postTransferUntag } from './api.js';
+import { fetchTransfers, postTransferUntag, postTransfersSeen } from './api.js';
 import { formatCurrency } from './summary.js';
 import { buildRowMain } from './transactionRow.js';
 
@@ -37,6 +40,8 @@ const _BANK_LABEL = { commbank: 'CommBank', westpac: 'Westpac' };
  *   fetchFn?: () => Promise<object>,
  *   untagFn?: (pairId: number) => Promise<object>,
  *   toastFn?: ((spec: {title?: string, body?: string, kind?: string}) => void)|null,
+ *   seenFn?: () => Promise<object>,
+ *   onSeen?: (() => void)|null,
  * }} options
  * @returns {{ load(): void, destroy(): void }}
  */
@@ -45,6 +50,8 @@ export function createTransfers({
   fetchFn = fetchTransfers,
   untagFn = postTransferUntag,
   toastFn = null,
+  seenFn = postTransfersSeen,
+  onSeen = null,
 } = {}) {
   const doc = root.documentElement ? root : root.ownerDocument ?? document;
 
@@ -169,6 +176,12 @@ export function createTransfers({
 
   /** Fetch and render the current transfer pairs. */
   function load() {
+    // Mark the view seen: optimistic badge clear now, fire-and-forget POST after.
+    // A seen-marker failure must never affect rendering — the badge resyncs from the
+    // next /summary fetch. The Promise wrapper also swallows a synchronously-throwing
+    // injected seenFn.
+    if (typeof onSeen === 'function') onSeen();
+    Promise.resolve().then(() => seenFn()).catch(() => {});
     const token = ++_token;
     fetchFn()
       .then((data) => {

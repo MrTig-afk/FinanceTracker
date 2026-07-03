@@ -222,6 +222,23 @@ a.nav-item {
   opacity: 1;
 }
 
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;          /* .nav-item is flex; pushes the pill to the right edge */
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+.nav-badge[hidden] { display: none; }
+
 .sidebar-info {
   margin-top: auto;
   padding: 14px;
@@ -1798,6 +1815,24 @@ a.nav-item {
   height: auto;
 }
 
+/* Net position card (local-only closing-balance history). */
+.netpos-card {
+  margin-top: 18px;
+}
+
+.netpos-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+/* The derived combined-net line reads as a dashed line. */
+.trends-svg .s-line.netline {
+  stroke-dasharray: 6 4;
+}
+
 .trends-svg .grid-line {
   stroke: var(--border);
   stroke-width: 1;
@@ -2576,6 +2611,41 @@ a.nav-item {
   padding: 4px 2px;
   font-size: 0.9375rem;
   color: var(--muted);
+}
+
+/* Categoriser scorecard (v7) — read-only one row per month with data. */
+.settings-scorecard-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-scorecard-list .settings-scorecard-row:last-child {
+  border-bottom: none;
+}
+
+.settings-scorecard-month {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9375rem;
+  color: var(--text);
+}
+
+.settings-scorecard-pct {
+  flex: none;
+  font-size: 0.9375rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-scorecard-count {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Data & backup. */

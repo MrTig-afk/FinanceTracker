@@ -885,6 +885,78 @@ class TestTrendsEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# TestBalancesEndpoint — GET /balances (v7 feature 3 — net position)
+#
+# Balances rows are seeded directly into the app's store (same technique as
+# TestTrendsEndpoint) via a SEPARATE sqlite3 connection to the same DB file.
+# All amounts are SYNTHETIC.
+# ---------------------------------------------------------------------------
+
+
+class TestBalancesEndpoint:
+    def _seed(self, tmp_path, rows: list[tuple]) -> None:
+        """rows: (bank, year_month, closing_balance)."""
+        conn = sqlite3.connect(str(tmp_path / "test.sqlite"))
+        conn.executemany(
+            "INSERT INTO balances(bank, year_month, closing_balance, derived_at)"
+            " VALUES (?,?,?,'t')",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+    def test_empty_db_exact_shape(self, api_client):
+        r = api_client.get("/balances")
+        assert r.status_code == 200
+        assert r.json() == {"months": [], "series": [], "net": []}
+
+    def test_populated_shape_matches_contract(self, api_client, tmp_path):
+        # Westpac deliberately missing 2026-06 (derivation was unavailable then).
+        self._seed(tmp_path, [
+            ("commbank", "2026-05", "1023.10"),
+            ("commbank", "2026-06", "998.40"),
+            ("commbank", "2026-07", "1101.55"),
+            ("westpac", "2026-05", "502.00"),
+            ("westpac", "2026-07", "512.13"),
+        ])
+        r = api_client.get("/balances")
+        assert r.status_code == 200
+        body = r.json()
+
+        assert body["months"] == ["2026-05", "2026-06", "2026-07"]
+        cb = next(s for s in body["series"] if s["bank"] == "commbank")
+        wp = next(s for s in body["series"] if s["bank"] == "westpac")
+        assert [s["bank"] for s in body["series"]] == ["commbank", "westpac"]
+        assert cb["values"] == ["1023.10", "998.40", "1101.55"]
+        assert wp["values"] == ["502.00", None, "512.13"]
+        # net is null wherever any present bank is null (2026-06 -> westpac gap).
+        assert body["net"] == ["1525.10", None, "1613.68"]
+
+    def test_all_money_values_are_strings(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("commbank", "2026-06", "998.40"),
+            ("westpac", "2026-06", "502.00"),
+        ])
+        body = api_client.get("/balances").json()
+        for s in body["series"]:
+            for v in s["values"]:
+                assert v is None or isinstance(v, str)
+        for v in body["net"]:
+            assert v is None or isinstance(v, str)
+
+    def test_reset_reports_and_clears_balances(self, api_client, tmp_path):
+        self._seed(tmp_path, [
+            ("commbank", "2026-06", "998.40"),
+            ("westpac", "2026-06", "502.00"),
+        ])
+        r = api_client.post("/reset", json={"confirm": "RESET"})
+        assert r.status_code == 200
+        assert r.json()["cleared"]["balances"] == 2
+        # No balances remain, and the endpoint reflects the empty shape.
+        assert api_client.get("/balances").json() == {"months": [], "series": [], "net": []}
+
+
+# ---------------------------------------------------------------------------
 # TestPushEndpoints — POST /push/subscribe, POST /push/unsubscribe (v2 Pass 3)
 #
 # All endpoints/keys are SYNTHETIC. These endpoints only ever store/remove a
@@ -1237,6 +1309,169 @@ class TestCategoryOverride:
         assert self._category_of(row["id"]) == "Transport"
         # Fail-closed: the un-sanitisable description is never stored for reuse.
         assert self._corrections() == []
+
+
+# ---------------------------------------------------------------------------
+# TestCategoriserScorecard — override event write hook + GET /categoriser/scorecard
+# (v7 feature 4). Events store ONLY (from, to, timestamp): the write is UNGATED by
+# corrections_enabled, no-op/transfer/untag paths never pollute the log. SYNTHETIC.
+# ---------------------------------------------------------------------------
+
+
+class TestCategoriserScorecard:
+    """The app runs its Store in a worker thread, so the test uses its OWN
+    independent sqlite3 connection to the same tmp DB to inspect / seed rows.
+    """
+
+    @staticmethod
+    def _conn():
+        conn = sqlite3.connect(os.environ["SQLITE_PATH"])
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _events(self):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT id, created_at, from_category, to_category "
+                "FROM override_events ORDER BY id"
+            ).fetchall()
+
+    def _corrections(self):
+        with self._conn() as conn:
+            return conn.execute("SELECT cleaned_description, category FROM corrections").fetchall()
+
+    def _first_categorised(self):
+        with self._conn() as conn:
+            return conn.execute(
+                "SELECT id, category FROM transactions WHERE category IS NOT NULL ORDER BY id"
+            ).fetchone()
+
+    def _seed_uncategorised(self, *, fp: str, created_at: str) -> None:
+        """Insert one NULL-category synthetic row with a controlled created_at."""
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO transactions"
+                "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+                " VALUES (?,?,?,?,?,NULL,?,?)",
+                (fp, "2020-01-01", "SYNTH UNCAT", "-1.00", "commbank", "2020-01", created_at),
+            )
+            conn.commit()
+
+    # -- event write hook ---------------------------------------------------
+
+    def test_override_logs_event_with_corrections_off(self, api_client):
+        _upload_both(api_client)  # corrections_enabled defaults OFF
+        row = self._first_categorised()
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Dining Out"}
+        )
+        assert resp.status_code == 200
+
+        events = self._events()
+        assert len(events) == 1
+        assert events[0]["from_category"] == row["category"]
+        assert events[0]["to_category"] == "Dining Out"
+        # UNGATED event, but the gated correction is NOT written when opt-in is OFF.
+        assert list(self._corrections()) == []
+
+    def test_override_logs_event_and_correction_with_toggle_on(self, api_client):
+        _upload_both(api_client)
+        api_client.put("/settings", json={"corrections_enabled": True})
+        row = self._first_categorised()
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Dining Out"}
+        )
+        assert resp.status_code == 200
+
+        # Exactly ONE event (not double-written) AND one correction.
+        assert len(self._events()) == 1
+        assert len(self._corrections()) == 1
+
+    def test_noop_override_writes_no_event(self, api_client):
+        _upload_both(api_client)
+        row = self._first_categorised()  # already "Groceries" from the fake analyser
+
+        resp = api_client.post(
+            "/category-override", json={"id": row["id"], "category": row["category"]}
+        )
+        assert resp.status_code == 200
+        assert self._events() == []
+
+    def test_override_uncategorised_logs_null_from(self, api_client):
+        _upload_both(api_client)
+        # Out-of-window ingest month so it never enters the scorecard denominator.
+        self._seed_uncategorised(fp="uncat1", created_at="2020-01-01T00:00:00+00:00")
+
+        resp = api_client.post(
+            "/category-override", json={"fingerprint": "uncat1", "category": "Groceries"}
+        )
+        assert resp.status_code == 200
+
+        events = self._events()
+        assert len(events) == 1
+        assert events[0]["from_category"] is None  # remediation, not an LLM error
+
+        # NULL-from events are excluded from `corrected` everywhere in the window.
+        card = api_client.get("/categoriser/scorecard").json()
+        assert sum(m["corrected"] for m in card["months"]) == 0
+
+    # -- no pollution from transfer paths (D-4) -----------------------------
+
+    def test_transfer_untag_writes_no_event(self, api_client):
+        pair = TestTransfersEndpoints._seed_pair(out_category="Groceries")
+        r = api_client.post(f"/transfers/{pair}/untag")
+        assert r.status_code == 200
+        assert self._events() == []
+
+    def test_transfer_leg_409_override_writes_no_event(self, api_client):
+        TestTransfersEndpoints._seed_pair(out_category="Groceries")
+        leg_id = TestTransfersEndpoints._leg_id("tpo")
+
+        r = api_client.post(
+            "/category-override", json={"id": leg_id, "category": "Dining Out"}
+        )
+        assert r.status_code == 409
+        assert self._events() == []  # rejected before any write
+
+    # -- GET /categoriser/scorecard -----------------------------------------
+
+    def test_scorecard_shape(self, api_client):
+        body = api_client.get("/categoriser/scorecard?months=3").json()
+        assert set(body.keys()) == {"window", "months", "current"}
+        assert body["window"] == 3
+        assert len(body["months"]) == 3
+        assert body["current"] == body["months"][-1]
+        for entry in body["months"]:
+            assert set(entry.keys()) == {
+                "month", "auto_categorised", "corrected", "accuracy_pct"
+            }
+
+    def test_scorecard_default_window_is_six(self, api_client):
+        body = api_client.get("/categoriser/scorecard").json()
+        assert body["window"] == 6
+        assert len(body["months"]) == 6
+
+    def test_scorecard_months_zero_400(self, api_client):
+        r = api_client.get("/categoriser/scorecard?months=0")
+        assert r.status_code == 400
+        assert r.json()["detail"] == "months must be >= 1"
+
+    def test_scorecard_upper_clamped_to_24(self, api_client):
+        body = api_client.get("/categoriser/scorecard?months=100").json()
+        assert body["window"] == 24
+
+    def test_reset_reports_override_events_count(self, api_client):
+        _upload_both(api_client)
+        row = self._first_categorised()
+        api_client.post("/category-override", json={"id": row["id"], "category": "Dining Out"})
+        assert len(self._events()) == 1
+
+        r = api_client.post("/reset", json={"confirm": "RESET"})
+        assert r.status_code == 200
+        assert r.json()["cleared"]["override_events"] == 1
+        assert self._events() == []
 
 
 # ---------------------------------------------------------------------------
@@ -1913,6 +2148,66 @@ class TestTransfersEndpoints:
             "/category-override", json={"id": leg_id, "category": "Dining Out"}
         )
         assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# TestTransfersUnseenEndpoints — GET /summary.transfers_unseen +
+# POST /transfers/seen (v7 feature 2). Seeds a synthetic cross-bank pair via a
+# separate Store on the same on-disk DB (the app store is bound to the client
+# worker thread), then drives the endpoints end-to-end. All SYNTHETIC.
+# ---------------------------------------------------------------------------
+
+
+class TestTransfersUnseenEndpoints:
+    @staticmethod
+    def _seed_pair():
+        """Insert one synthetic CommBank/Westpac leg pair; run detection."""
+        from backend.store import Store
+
+        with Store(os.environ["SQLITE_PATH"]) as store:
+            store.conn.executemany(
+                "INSERT INTO transactions"
+                "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+                " VALUES (?,?,?,?,?,?,?,'t')",
+                [
+                    ("uso", "2026-06-01", "SYNTHXFEROUT", "-500.00", "commbank", None, "2026-06"),
+                    ("usi", "2026-06-02", "SYNTHXFERIN", "500.00", "westpac", None, "2026-06"),
+                ],
+            )
+            store.conn.commit()
+            store.detect_transfers()
+
+    def test_summary_empty_db_has_zero(self, api_client):
+        body = api_client.get("/summary").json()
+        assert body["transfers_unseen"] == 0
+
+    def test_seen_flow_end_to_end(self, api_client):
+        self._seed_pair()
+        # A newly detected pair is unseen.
+        assert api_client.get("/summary").json()["transfers_unseen"] == 1
+
+        r = api_client.post("/transfers/seen")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["transfers_unseen"] == 0
+        assert isinstance(body["last_viewed_at"], str) and body["last_viewed_at"]
+
+        # The summary now reports the pair as seen.
+        assert api_client.get("/summary").json()["transfers_unseen"] == 0
+
+    def test_seen_is_idempotent(self, api_client):
+        first = api_client.post("/transfers/seen")
+        second = api_client.post("/transfers/seen")
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert second.json()["ok"] is True
+
+    def test_reclassify_response_inherits_field(self, api_client):
+        # The month must exist for /reclassify; upload seeds synthetic data.
+        _upload_both(api_client)
+        body = api_client.post("/reclassify", params={"enabled": "true"}).json()
+        assert "transfers_unseen" in body
 
 
 # ---------------------------------------------------------------------------

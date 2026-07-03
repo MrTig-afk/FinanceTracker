@@ -441,6 +441,7 @@ class TestSummaryCorrectness:
             "fuel_rule_eligible": 0,
             "fuel_rule_eligible_amount": "0.00",
             "account_balances": {},
+            "transfers_unseen": 0,
         }
 
     def test_summary_mixed_income_and_expense(self) -> None:
@@ -2095,3 +2096,135 @@ class TestTransferExclusionFromAggregates:
             assert counts["transfer_pairs"] == 1
             (after,) = store.conn.execute("SELECT COUNT(*) FROM transfer_pairs").fetchone()
             assert after == 0
+
+
+# ---------------------------------------------------------------------------
+# TestTransfersUnseen — unseen-count nav badge (v7 feature 2).
+#
+# unseen_transfer_count() / mark_transfers_seen() over the app_settings marker
+# 'transfers_last_viewed_at'. Transfer pairs are inserted DIRECTLY with explicit
+# synthetic created_at strings so ordering is deterministic (no clock race). Each
+# pair needs two distinct transaction rows (txn_id_out / txn_id_in are UNIQUE).
+# All fixtures SYNTHETIC; :memory: only; no network.
+# ---------------------------------------------------------------------------
+
+_MARKER_KEY = "transfers_last_viewed_at"
+
+
+def _insert_pair(store, *, created_at, status="active", n=[0]):
+    """Insert two synthetic legs + one transfer_pairs row; return the pair id.
+
+    `n` is a mutable default used only as a per-process unique counter so each
+    call gets distinct fingerprints / txn ids (transfer_pairs.txn_id_* are UNIQUE).
+    """
+    n[0] += 1
+    tag = f"P{n[0]}"
+    out_id = _insert_txn(
+        store, d="2026-06-01", amount="-500.00", bank=_COMMBANK_V,
+        desc=f"SYNTH OUT {tag}", fp=f"xfer-out-{tag}",
+    )
+    in_id = _insert_txn(
+        store, d="2026-06-02", amount="500.00", bank=_WESTPAC_V,
+        desc=f"SYNTH IN {tag}", fp=f"xfer-in-{tag}",
+    )
+    cur = store.conn.execute(
+        "INSERT INTO transfer_pairs (txn_id_out, txn_id_in, status, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (out_id, in_id, status, created_at),
+    )
+    store.conn.commit()
+    return cur.lastrowid
+
+
+class TestTransfersUnseen:
+    def test_never_viewed_counts_all_active_pairs(self):
+        with Store(":memory:") as store:
+            _insert_pair(store, created_at="2026-06-02T00:00:00+00:00")
+            _insert_pair(store, created_at="2026-06-03T00:00:00+00:00")
+            # No marker set → every active pair is "unseen".
+            assert store.get_setting(_MARKER_KEY) is None
+            assert store.unseen_transfer_count() == 2
+
+    def test_never_viewed_empty_is_zero(self):
+        with Store(":memory:") as store:
+            assert store.unseen_transfer_count() == 0
+
+    def test_mark_seen_drops_count_to_zero(self):
+        with Store(":memory:") as store:
+            _insert_pair(store, created_at="2026-06-02T00:00:00+00:00")
+            _insert_pair(store, created_at="2026-06-03T00:00:00+00:00")
+            assert store.unseen_transfer_count() == 2
+
+            returned = store.mark_transfers_seen()
+            # The stored marker is exactly what was returned.
+            assert returned == store.get_setting(_MARKER_KEY)
+            # "now" is by construction >= every existing pair's created_at.
+            assert store.unseen_transfer_count() == 0
+
+    def test_marker_format_matches_utc_now_iso(self):
+        from datetime import datetime
+
+        with Store(":memory:") as store:
+            returned = store.mark_transfers_seen()
+            # Parses as ISO-8601 and is UTC (tz-aware, zero offset) — same shape
+            # as _utc_now_iso() which produces datetime.now(timezone.utc).isoformat().
+            parsed = datetime.fromisoformat(returned)
+            assert parsed.tzinfo is not None
+            assert parsed.utcoffset().total_seconds() == 0
+
+    def test_strictly_newer_than_marker(self):
+        with Store(":memory:") as store:
+            marker = "2026-06-02T12:00:00.000000+00:00"
+            # A pair created exactly AT the marker must NOT count (comparison is >).
+            _insert_pair(store, created_at=marker)
+            # One microsecond later MUST count.
+            _insert_pair(store, created_at="2026-06-02T12:00:00.000001+00:00")
+            store.set_setting(_MARKER_KEY, marker)
+
+            assert store.unseen_transfer_count() == 1
+
+    def test_dismissed_pairs_never_counted(self):
+        with Store(":memory:") as store:
+            active_id = _insert_pair(store, created_at="2026-06-02T00:00:00+00:00")
+            _insert_pair(store, created_at="2026-06-03T00:00:00+00:00", status="dismissed")
+            # No marker → count all ACTIVE pairs; the dismissed one is invisible.
+            assert store.unseen_transfer_count() == 1
+
+            # Dismissing the last active pair drops the count to zero.
+            store.untag_transfer_pair(active_id)
+            assert store.unseen_transfer_count() == 0
+
+    def test_summary_carries_the_field(self):
+        with Store(":memory:") as store:
+            # Empty DB → 0.
+            assert store.summary(None)["transfers_unseen"] == 0
+
+            _insert_pair(store, created_at="2026-06-02T00:00:00+00:00")
+            # summary() mirrors the live count (global, not month-scoped).
+            assert store.summary(None)["transfers_unseen"] == 1
+            assert store.summary("2026-06")["transfers_unseen"] == 1
+
+            store.mark_transfers_seen()
+            assert store.summary(None)["transfers_unseen"] == 0
+
+    def test_mark_seen_idempotent_single_row(self):
+        with Store(":memory:") as store:
+            store.mark_transfers_seen()
+            store.mark_transfers_seen()
+            (count,) = store.conn.execute(
+                "SELECT COUNT(*) FROM app_settings WHERE key = ?", (_MARKER_KEY,)
+            ).fetchone()
+            assert count == 1
+
+    def test_reset_all_data_preserves_marker_and_count_is_zero(self):
+        # DECISION (documented in test-results.md): reset_all_data() deliberately
+        # PRESERVES app_settings, so the 'transfers_last_viewed_at' marker survives a
+        # reset. All transfer_pairs are wiped, so the unseen count is 0 afterwards.
+        with Store(":memory:") as store:
+            _insert_pair(store, created_at="2026-06-02T00:00:00+00:00")
+            marker = store.mark_transfers_seen()
+
+            store.reset_all_data()
+
+            assert store.get_setting(_MARKER_KEY) == marker  # marker preserved
+            assert store.unseen_transfer_count() == 0  # no pairs remain

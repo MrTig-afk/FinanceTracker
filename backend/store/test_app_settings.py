@@ -180,6 +180,8 @@ class TestResetAllData:
                 "budget_alert_fired": 0,
                 "subscriptions": 0,
                 "subscription_event_fired": 0,
+                "balances": 0,
+                "override_events": 0,
             }
 
             assert store.all_transactions_for_export() == []
@@ -218,5 +220,7 @@ class TestResetAllData:
                 "budget_alert_fired": 0,
                 "subscriptions": 0,
                 "subscription_event_fired": 0,
+                "balances": 0,
+                "override_events": 0,
             }
             assert len(store.get_category_context()) == 8

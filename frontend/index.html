@@ -47,6 +47,7 @@
           </a>
           <a href="#" class="nav-item" data-view="transfers">
             <span class="nav-dot"></span>Transfers
+            <span id="nav-badge-transfers" class="nav-badge" hidden aria-label="new transfers"></span>
           </a>
           <a href="#" class="nav-item" data-view="trends">
             <span class="nav-dot"></span>Trends
@@ -512,6 +513,22 @@
                 </div>
               </div>
             </section>
+            <!-- Net position over time (local-only; balances never leave this machine) -->
+            <p id="netpos-message" class="message-banner" hidden></p>
+            <section class="card netpos-card">
+              <h2 class="netpos-title">Net position</h2>
+              <div class="trends-layout">
+                <div class="trends-chart-col">
+                  <svg id="netpos-chart" class="trends-svg" viewBox="0 0 900 400"
+                       role="img" aria-label="Net position over time"></svg>
+                </div>
+                <div class="trends-legend-col">
+                  <div class="trends-legend-head">Accounts</div>
+                  <div class="trends-legend-list" id="netpos-legend"></div>
+                  <div class="trends-legend-foot">Closing balance per month. Hover to spotlight; click to hide, click again to restore.</div>
+                </div>
+              </div>
+            </section>
           </section>
 
           <!-- Settings view (Feature E) -->
@@ -584,6 +601,15 @@
                 </p>
                 <div id="settings-corrections-list" class="settings-corrections-list"></div>
                 <p id="settings-corrections-status" class="settings-status" role="status" aria-live="polite"></p>
+              </section>
+
+              <!-- Categoriser scorecard (v7) — read-only accuracy trend -->
+              <section class="card settings-card">
+                <h2 class="card-title">Categoriser scorecard</h2>
+                <p class="card-sub">How often the automatic sorting needed a manual fix, month by month.</p>
+                <p id="settings-scorecard-headline" class="settings-summary">Loading...</p>
+                <div id="settings-scorecard-months" class="settings-scorecard-list"></div>
+                <p id="settings-scorecard-status" class="settings-status" role="status" aria-live="polite"></p>
               </section>
 
               <!-- Data & backup -->

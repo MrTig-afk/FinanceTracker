@@ -207,6 +207,31 @@ describe('index.html — Trends view section', () => {
   });
 });
 
+// v7 feature 3 — Net position card inside the Trends view.
+describe('index.html — Net position card (v7 feature 3)', () => {
+  it('contains the net-position message, inline-SVG chart, and legend ids', () => {
+    expect(html).toContain('id="netpos-message"');
+    expect(html).toContain('id="netpos-chart"');
+    expect(html).toContain('id="netpos-legend"');
+  });
+
+  it('renders the Net position card inside the Trends view section', () => {
+    const trendsMatch = html.match(/<section class="view" data-view="trends" hidden>[\s\S]*?\n {10}<\/section>/);
+    expect(trendsMatch).not.toBeNull();
+    const trends = trendsMatch[0];
+    expect(trends).toContain('class="card netpos-card"');
+    expect(trends).toContain('id="netpos-chart"');
+  });
+
+  it('draws the net-position chart as an inline <svg> (no <canvas>) with the design viewBox', () => {
+    const svgMatch = html.match(/<svg id="netpos-chart"[\s\S]*?<\/svg>/);
+    expect(svgMatch).not.toBeNull();
+    expect(svgMatch[0]).toContain('viewBox="0 0 900 400"');
+    expect(html).not.toContain('id="netpos-canvas"');
+    expect(html).not.toContain('<canvas id="netpos');
+  });
+});
+
 describe('index.html — Overview mini spend-over-time bar', () => {
   it('has an #overview-trend-canvas inside the overview section', () => {
     expect(html).toContain('id="overview-trend-canvas"');
@@ -219,6 +244,44 @@ describe('index.html — Overview mini spend-over-time bar', () => {
 
   it('the overview mini card title is the exact spec string', () => {
     expect(html).toContain('Spending over the last 6 months');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v7 feature 2 — Transfers unseen-count nav badge.
+// ---------------------------------------------------------------------------
+
+describe('index.html — Transfers unseen-count nav badge', () => {
+  it('has the badge span with the pinned id, class, and hidden attribute', () => {
+    expect(html).toContain('id="nav-badge-transfers"');
+    const spanMatch = html.match(/<span id="nav-badge-transfers"[^>]*>/);
+    expect(spanMatch).not.toBeNull();
+    expect(spanMatch[0]).toContain('class="nav-badge"');
+    expect(spanMatch[0]).toContain('hidden');
+  });
+
+  it('nests the badge INSIDE the Transfers anchor (one element, both navs)', () => {
+    const anchorMatch = html.match(
+      /<a href="#" class="nav-item" data-view="transfers">[\s\S]*?<\/a>/,
+    );
+    expect(anchorMatch).not.toBeNull();
+    expect(anchorMatch[0]).toContain('id="nav-badge-transfers"');
+    // The anchor still names the view and keeps its dot.
+    expect(anchorMatch[0]).toContain('Transfers');
+    expect(anchorMatch[0]).toContain('class="nav-dot"');
+  });
+
+  it('the badge lives inside the sidebar-nav block (also the mobile drawer)', () => {
+    const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/)[0];
+    expect(navMatch).toContain('id="nav-badge-transfers"');
+  });
+
+  it('keeps the Transfers anchor opening tag byte-identical (pinned regex intact)', () => {
+    // The pinned trends-anchor-style regex must still match the transfers anchor.
+    const navMatch = html.match(
+      /<a href="#" class="nav-item" data-view="transfers">[\s\S]*?<\/a>/,
+    );
+    expect(navMatch).not.toBeNull();
   });
 });
 

@@ -16,6 +16,7 @@ import { createCategoryContext } from './categoryContextController.js';
 import { createMonthly } from './monthlyController.js';
 import { createYearly } from './yearlyController.js';
 import { createTrends } from './trendsController.js';
+import { createNetPosition } from './netPositionController.js';
 import { createSearch } from './searchController.js';
 import { createTransfers } from './transfersController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
@@ -25,6 +26,7 @@ import { createToast } from './toast.js';
 import { createNotificationBridge } from './notifications.js';
 import { createCategoryDrawer } from './categoryDrawer.js';
 import { createMobileNav } from './mobileNav.js';
+import { createNavBadge } from './navBadge.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -69,6 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
     onCategorySelect: (category, meta) => categoryDrawer.open(category, meta),
   });
   const overviewTrend = createOverviewTrend({ root: document });
+  const navBadge = createNavBadge({ root: document });
   const fuelToast = createFuelToast(document);
   const statusDot = document.getElementById('status-dot');
   const refreshBtn = document.getElementById('refresh');
@@ -97,7 +100,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // -------------------------------------------------------------------------
   async function load() {
     try {
-      renderSummary(await fetchSummary(), { pulse: false });
+      const summary = await fetchSummary();
+      renderSummary(summary, { pulse: false });
+      navBadge.set(summary.transfers_unseen ?? 0);
     } catch (err) {
       dash.showError(err);
     }
@@ -136,6 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let monthly = null;
   let yearly = null;
   let trends = null;
+  let netPosition = null;
   let search = null;
   let transfers = null;
   let settings = null;
@@ -153,6 +159,8 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (view === 'trends') {
         if (!trends) trends = createTrends({ root: document });
         trends.load();
+        if (!netPosition) netPosition = createNetPosition({ root: document });
+        netPosition.load();
       } else if (view === 'search') {
         if (!search) search = createSearch({ root: document });
         search.load();
@@ -163,6 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
           transfers = createTransfers({
             root: document,
             toastFn: (spec) => notifyToast.show(spec),
+            onSeen: () => navBadge.clear(),
           });
         }
         transfers.load();
@@ -247,6 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const summary = await postReclassify(enabled);
         renderSummary(summary, { pulse: true });
+        navBadge.set(summary.transfers_unseen ?? 0);
         // Confirm the user's toggle action with a transient top-right toast,
         // using the real eligible-count / amount from the reclassify response.
         fuelToast.show(enabled, {

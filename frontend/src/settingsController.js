@@ -20,6 +20,7 @@ import {
   getCategoriserStatus,
   postCategoriserTest,
   postCategoriserRetry,
+  getScorecard,
   postReset,
   transactionsCsvUrl,
 } from './api.js';
@@ -67,6 +68,9 @@ const RESET_CONFIRM = 'RESET';
  *   #settings-corrections-toggle     opt-in checkbox
  *   #settings-corrections-list       container for the corrections list
  *   #settings-corrections-status     inline status/error line
+ *   #settings-scorecard-headline     headline accuracy line
+ *   #settings-scorecard-months       container for the per-month rows
+ *   #settings-scorecard-status       inline status/error line
  *
  * @param {{
  *   root?: Document,
@@ -86,6 +90,7 @@ export function createSettings({ root = document, api } = {}) {
     getCategoriserStatus,
     postCategoriserTest,
     postCategoriserRetry,
+    getScorecard,
     postReset,
     transactionsCsvUrl,
     ...(api ?? {}),
@@ -116,6 +121,10 @@ export function createSettings({ root = document, api } = {}) {
   const corrToggle = root.getElementById('settings-corrections-toggle');
   const corrList = root.getElementById('settings-corrections-list');
   const corrStatus = root.getElementById('settings-corrections-status');
+
+  const scorecardHeadline = root.getElementById('settings-scorecard-headline');
+  const scorecardMonths = root.getElementById('settings-scorecard-months');
+  const scorecardStatus = root.getElementById('settings-scorecard-status');
 
   const _listeners = [];
   function _on(el, event, handler) {
@@ -385,6 +394,63 @@ export function createSettings({ root = document, api } = {}) {
     }
   }
 
+  // --- Categoriser scorecard (read-only accuracy trend) ---------------------
+
+  /**
+   * Human month name from a "YYYY-MM" key. Long form ("June") for the headline,
+   * short form + year ("Jun 2026") for the per-month rows.
+   */
+  function _monthName(ym, { short = false } = {}) {
+    const d = new Date(`${ym}-01T00:00:00`);
+    const name = d.toLocaleString('en-AU', { month: short ? 'short' : 'long' });
+    return short ? `${name} ${ym.slice(0, 4)}` : name;
+  }
+
+  function _renderScorecard(data) {
+    const months = data && Array.isArray(data.months) ? data.months : [];
+    const withData = months.filter((m) => m.auto_categorised > 0);
+
+    if (scorecardMonths) scorecardMonths.textContent = '';
+
+    // Headline = the most recent month WITH data (D-9): the current month may have
+    // no upload yet, so "now" is not necessarily the number to show.
+    const headline = withData.length ? withData[withData.length - 1] : null;
+    if (scorecardHeadline) {
+      if (!headline) {
+        scorecardHeadline.textContent = 'No categorised transactions yet.';
+      } else {
+        const noun = headline.corrected === 1 ? 'correction' : 'corrections';
+        scorecardHeadline.textContent =
+          `${_monthName(headline.month)}: ${headline.accuracy_pct}% - ` +
+          `${headline.corrected} ${noun} out of ${headline.auto_categorised}`;
+      }
+    }
+
+    if (!headline || !scorecardMonths) return;
+
+    for (const m of withData) {
+      const row = doc.createElement('div');
+      row.className = 'settings-scorecard-row';
+
+      const month = doc.createElement('span');
+      month.className = 'settings-scorecard-month';
+      month.textContent = _monthName(m.month, { short: true });
+
+      const pct = doc.createElement('span');
+      pct.className = 'settings-scorecard-pct';
+      pct.textContent = `${m.accuracy_pct}%`;
+
+      const count = doc.createElement('span');
+      count.className = 'settings-scorecard-count';
+      count.textContent = `${m.corrected} of ${m.auto_categorised} corrected`;
+
+      row.appendChild(month);
+      row.appendChild(pct);
+      row.appendChild(count);
+      scorecardMonths.appendChild(row);
+    }
+  }
+
   // --- Learned corrections --------------------------------------------------
 
   function _renderCorrections(corrections) {
@@ -518,6 +584,7 @@ export function createSettings({ root = document, api } = {}) {
     _setStatus(resetStatus, '');
     _setStatus(catTestStatus, '');
     _setStatus(catRetryStatus, '');
+    _setStatus(scorecardStatus, '');
 
     // Settings (notification toggles + corrections opt-in).
     try {
@@ -551,6 +618,14 @@ export function createSettings({ root = document, api } = {}) {
       _renderCategoriserSummary(status);
     } catch {
       _renderCategoriserSummary(null);
+    }
+
+    // Categoriser scorecard (read-only accuracy trend).
+    try {
+      _renderScorecard(await _api.getScorecard());
+    } catch {
+      _renderScorecard(null);
+      _setStatus(scorecardStatus, 'Could not load the scorecard.', true);
     }
 
     // Learned corrections list.

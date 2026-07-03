@@ -125,6 +125,27 @@ export async function fetchTrends(months, end) {
 }
 
 /**
+ * Fetch the monthly closing-balance series (net position) from the backend.
+ * Reads the owner's own local backend only; balances never leave the machine.
+ * @returns {Promise<object>}  Parsed JSON balance-series object.
+ * @throws {ApiError}          On network failure or non-2xx response.
+ */
+export async function fetchBalances() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/balances`, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
  * Fetch one category's transactions for a month (dashboard drill-down).
  * Reads the owner's own local backend only; descriptions never go off-machine.
  * @param {string} category  Canonical category name, or 'Uncategorised'.
@@ -212,6 +233,30 @@ export async function postTransferUntag(pairId) {
   let res;
   try {
     res = await fetch(`${API_BASE}/transfers/${encodeURIComponent(pairId)}/untag`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Mark the Transfers view as seen on the owner's own local backend, clearing the
+ * unseen-count nav badge. Carries no body and no transaction data.
+ * @returns {Promise<{ok: boolean, last_viewed_at: string, transfers_unseen: number}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function postTransfersSeen() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/transfers/seen`, {
       method: 'POST',
       headers: { Accept: 'application/json' },
     });
@@ -445,6 +490,32 @@ export async function getBudgets() {
   let res;
   try {
     res = await fetch(`${API_BASE}/budgets`, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch the categoriser accuracy scorecard (monthly auto-categorised vs corrected).
+ * LOCAL, read-only: categories + timestamps only, no transaction content.
+ * @returns {Promise<{window: number, months: Array<{month: string,
+ *   auto_categorised: number, corrected: number, accuracy_pct: number|null}>,
+ *   current: {month: string, auto_categorised: number, corrected: number,
+ *   accuracy_pct: number|null}}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function getScorecard() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/categoriser/scorecard`, {
       headers: { Accept: 'application/json' },
     });
   } catch (e) {

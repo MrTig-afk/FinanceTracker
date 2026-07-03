@@ -432,6 +432,21 @@ def run_pipeline(
     # it never touches category — see Store.reconcile_balances.
     balance_updates = store.reconcile_balances(all_parsed_txns)
 
+    affected_balance_months = sorted({t.date.isoformat()[:7] for t in all_parsed_txns})
+
+    # v7: opportunistic backfill snapshot, BEFORE the no-op guard on purpose
+    # (DECISION): a re-upload of an already-processed file still parses (see
+    # Layer 1 above), so re-uploading an old statement is the ONLY way a
+    # pre-feature month (one whose balances row was never written, e.g. an older
+    # DB) can enter the history on a run that otherwise short-circuits at the
+    # no-op guard below. This call only sees rows ALREADY persisted by a PRIOR
+    # run — on a first-time upload the new rows are not in the transactions
+    # table yet, so it derives nothing here; the second call below (after
+    # add_new) is what covers that case. record_month_balances is an idempotent
+    # upsert-on-change, so calling it twice per run is safe: unchanged closings
+    # write nothing. LOCAL-ONLY SQLite work; zero network.
+    store.record_month_balances(affected_balance_months)
+
     # ------------------------------------------------------------------
     # Layer 2 — transaction-level dedupe (FR-13 / FR-15)
     # ------------------------------------------------------------------
@@ -487,6 +502,14 @@ def run_pipeline(
 
     # Persist the new rows (upsert — balance-only on conflict; double-run safe).
     store.add_new(result)
+
+    # v7: snapshot again now that add_new has persisted this run's new rows —
+    # this is what populates the balances history on a FIRST-TIME upload (the
+    # early call above only sees rows a PRIOR run already stored). Same
+    # idempotent upsert-on-change semantics: a re-upload whose rows were already
+    # captured by the early call above writes nothing here. LOCAL-ONLY SQLite
+    # work; zero network.
+    store.record_month_balances(affected_balance_months)
 
     # ------------------------------------------------------------------
     # Layer 2.5 — deterministic internal-transfer netting (LOCAL, no LLM).

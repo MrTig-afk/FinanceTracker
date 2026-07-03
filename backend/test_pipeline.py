@@ -1736,3 +1736,182 @@ class TestInternalTransferNetting:
         assert report.excel_path is not None
         import pathlib
         assert pathlib.Path(report.excel_path).exists()
+
+
+# ---------------------------------------------------------------------------
+# v7 feature 3 — Net-position balance history snapshot hook (record_month_balances)
+#
+# Synthetic CSVs with CONSISTENT running-balance chains so account_balances can
+# derive a closing figure the hook can snapshot. All data is invented inline.
+# ---------------------------------------------------------------------------
+
+# CommBank chain: opening 1000 -> 900 -> 850 (closing 850.00).
+_CB_CHAIN = (
+    "20/06/2026,-100.00,SYNTH SHOP ONE,900.00\n"
+    "21/06/2026,-50.00,SYNTH SHOP TWO,850.00\n"
+)
+# Westpac chain: opening 580 -> 500 -> 700 (closing 700.00).
+_WP_CHAIN = (
+    "Bank Account,Date,Narrative,Debit Amount,Credit Amount,Balance,Categories,Serial\n"
+    "748007654321,23/06/2026,SYNTH UTILITY BILL,80.00,,500.00,,\n"
+    "748007654321,24/06/2026,SYNTH SALARY CREDIT,,200.00,700.00,,\n"
+)
+
+
+def _chain_uploads() -> list[UploadedFile]:
+    return [
+        UploadedFile(filename="commbank.csv", bank=Bank.COMMBANK, content=_CB_CHAIN.encode()),
+        UploadedFile(filename="westpac.csv", bank=Bank.WESTPAC, content=_WP_CHAIN.encode()),
+    ]
+
+
+def _balances_rows(store: Store) -> list[tuple]:
+    return store.conn.execute(
+        "SELECT bank, year_month, closing_balance, derived_at FROM balances "
+        "ORDER BY bank, year_month"
+    ).fetchall()
+
+
+class TestBalanceHistorySnapshotHook:
+    """The pipeline records each affected month's per-bank closing balance after
+    reconcile_balances — a local-only snapshot, never a network call."""
+
+    def test_derivation_to_storage_happy_path(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            _chain_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        rows = _balances_rows(store)
+        store.close()
+
+        stored = {(r["bank"], r["year_month"]): r["closing_balance"] for r in rows}
+        assert stored == {
+            ("commbank", "2026-06"): "850.00",
+            ("westpac", "2026-06"): "700.00",
+        }
+
+    def test_unavailable_derivation_stores_nothing_but_run_succeeds(self, tmp_path):
+        # A single balance-less CommBank row: derivation is unavailable, so no
+        # balances row is written, but the pipeline otherwise ingests normally.
+        cb_no_balance = "20/06/2026,-100.00,SYNTH SHOP ONE\n"
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        report = run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, cb_no_balance.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        balances_count = store.conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0]
+        txn_count = store.conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        store.close()
+
+        assert balances_count == 0
+        assert txn_count == 1, "row ingested even though balance was unavailable"
+        assert report.new_txns == 1
+
+    def test_reupload_idempotency_no_op_and_balances_byte_identical(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            _chain_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        rows_after_first = [tuple(r) for r in _balances_rows(store)]
+        calls_after_first = fake.call_count
+
+        report = run_pipeline(
+            _chain_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        rows_after_second = [tuple(r) for r in _balances_rows(store)]
+        store.close()
+
+        assert report.noop is True
+        assert fake.call_count == calls_after_first, "no extra LLM call on identical re-run"
+        # derived_at included in the tuple -> byte-identical means the WHERE guard held.
+        assert rows_after_second == rows_after_first
+
+    def test_pre_feature_backfill_repopulates_on_reupload(self, tmp_path):
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            _chain_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        # Simulate a pre-feature DB: the balances rows never existed.
+        store.conn.execute("DELETE FROM balances")
+        store.conn.commit()
+        assert store.conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0] == 0
+
+        # Re-upload the SAME bytes: overall a no-op, yet the hook (which runs
+        # before the no-op guard) repopulates the balances history.
+        report = run_pipeline(
+            _chain_uploads(),
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        repopulated = store.conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0]
+        store.close()
+
+        assert report.noop is True, "a same-bytes re-run is still reported as a no-op"
+        assert repopulated == 2, "the balances history is opportunistically backfilled"
+
+    def test_balance_sentinel_never_reaches_analyser_after_storage(self, tmp_path):
+        """BLOCKING privacy: a distinctive balance sentinel is stored locally but
+        never appears in any analyser payload/prompt, and every payload item's keys
+        remain exactly {row_index, cleaned_description, amount} AFTER the balances
+        table has been populated."""
+        sentinel = "77777.77"
+        cb_text = f"20/06/2026,-100.00,SYNTH SENTINEL SHOP,{sentinel}\n"
+        store = Store(":memory:")
+        fake = FakeAnalyserClient()
+        run_pipeline(
+            [UploadedFile("commbank.csv", Bank.COMMBANK, cb_text.encode())],
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        stored = store.conn.execute(
+            "SELECT closing_balance FROM balances WHERE bank = 'commbank'"
+        ).fetchone()
+        store.close()
+
+        # --- BLOCKING privacy invariant (asserted first, independent of storage) ---
+        # The sentinel never left the machine.
+        all_text = " ".join(fake.received_user_prompts) + " ".join(fake.received_system_prompts)
+        assert sentinel not in all_text
+        assert fake.call_count >= 1, "fake analyser was never called"
+        # Every off-machine payload item carries EXACTLY the sanitised triple.
+        for prompt in fake.received_user_prompts:
+            for item in json.loads(prompt):
+                assert set(item.keys()) == {"row_index", "cleaned_description", "amount"}
+
+        # --- Storage precondition: the sentinel is the local closing balance ---
+        # (Must hold AFTER the balances table is populated, per spec §7 test 14.)
+        assert stored is not None and stored["closing_balance"] == sentinel
