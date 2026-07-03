@@ -90,6 +90,7 @@ NOTIFICATION_TYPES = (
     "monthly_reminder",
     "budget_approaching",
     "budget_exceeded",
+    "transfer_detected",
     "subscription_new",
     "subscription_price_change",
     "income_missed",
@@ -176,6 +177,12 @@ def build_notification(
         cat = detail or "A category"
         title = "Budget exceeded"
         body = f"{cat} has passed its monthly budget ({n}% spent)."
+    elif ntype == "transfer_detected":
+        title = "Transfers detected"
+        body = (
+            f"{n} transfer(s) between your own accounts were excluded from "
+            f"spending - review them in the Transfers tab."
+        )
     elif ntype == "subscription_new":
         title = "New subscription detected"
         body = f"Detected {n} new recurring payment(s) - open the app to see the details."

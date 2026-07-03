@@ -2279,7 +2279,21 @@ a.nav-item {
   background: var(--inputbg);
   color: var(--text);
   font-family: inherit;
-  font-size: 0.9375rem;
+  /* 16px minimum: below that iOS Safari auto-zooms the page on focus, which is
+     what made typing feel clunky on the phone. */
+  font-size: 1rem;
+  /* Kill the native search-field chrome (rounded inset look + light background)
+     that mobile WebKit paints over our theme colors while typing. */
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* The native clear (x) button ignores the theme too — hide it; the input still
+   clears normally and load() resets it on every view switch. */
+.search-input::-webkit-search-cancel-button,
+.search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .search-input:focus-visible {
@@ -2311,6 +2325,17 @@ a.nav-item {
 .transfer-pair .cat-drawer-row {
   border-bottom: none;
   padding: 6px 0;
+}
+
+/* "From CommBank" / "To Westpac" tag above each leg — orients the pair at a
+   glance instead of two bare look-alike rows. */
+.transfer-leg-label {
+  margin-top: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
 }
 
 /* Ghost/secondary button, matching the settings-secondary-btn pattern. */

@@ -325,7 +325,8 @@ class TestUntagTransferPair:
             pair_id = store.list_transfer_pairs()[0]["id"]
 
             restored = store.untag_transfer_pair(pair_id)
-            assert restored == 2
+            # Rich result: count + where each leg went (None = back to Uncategorised).
+            assert restored == {"restored": 2, "out": "Groceries", "in": None}
             assert _category(store, out_id) == "Groceries"
             assert _category(store, in_id) is None  # NULL restored to NULL
             status = store.conn.execute(
@@ -339,8 +340,9 @@ class TestUntagTransferPair:
             _insert(store, d="2026-06-02", amount="500.00", bank=_WESTPAC)
             store.detect_transfers()
             pair_id = store.list_transfer_pairs()[0]["id"]
-            assert store.untag_transfer_pair(pair_id) == 2
-            assert store.untag_transfer_pair(pair_id) == 0
+            assert store.untag_transfer_pair(pair_id)["restored"] == 2
+            # Idempotent second call: nothing restored, no categories reported.
+            assert store.untag_transfer_pair(pair_id) == {"restored": 0}
 
     def test_unknown_id_returns_none(self):
         with Store(":memory:") as store:

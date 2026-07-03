@@ -142,7 +142,16 @@ async def lifespan(app: FastAPI):
     # startup without waiting for the next ingest. Deterministic, idempotent, and
     # LOCAL-ONLY (zero network); no workbook rebuild here (workbooks refresh on the
     # next pipeline run).
-    app.state.store.detect_transfers()
+    backfill = app.state.store.detect_transfers()
+    if backfill.pairs_created > 0:
+        # Never let an exclusion be a mystery: count-only notice (fail-closed no-op
+        # when push is unconfigured, e.g. a first launch with no subscriptions yet).
+        try:
+            send_notification(
+                app.state.store, "transfer_detected", count=backfill.pairs_created
+            )
+        except Exception:  # noqa: BLE001 — notifications are best-effort, never fatal
+            pass
     app.state.started_at = datetime.now(timezone.utc)
     app.state.last_report: RunReport | None = None
     app.state.last_run_at: datetime | None = None
@@ -493,17 +502,22 @@ async def untag_transfer(pair_id: int):
     as Uncategorised and the retry button can categorise it) and dismisses the pair.
 
     Unknown id -> 404. Already dismissed -> 200 with restored 0 (idempotent). Success
-    -> 200 with restored 2. FastAPI coerces pair_id; a non-int path is an automatic 422.
+    -> 200 with restored 2 plus restored_to {out, in} (each a category label or null
+    for Uncategorised) so the UI can say where each leg went. FastAPI coerces
+    pair_id; a non-int path is an automatic 422.
     """
-    restored = app.state.store.untag_transfer_pair(pair_id)
-    if restored is None:
+    result = app.state.store.untag_transfer_pair(pair_id)
+    if result is None:
         raise HTTPException(status_code=404, detail="transfer pair not found")
     # A successful untag restores each leg's previous category, which can change a
     # budgeted category's spend — guarded budget-alert check (never raises).
     check_budget_alerts(app.state.store)
     # Restoring a non-Transfer row can also affect recurring-merchant detection — guarded.
     check_subscriptions(app.state.store)
-    return {"ok": True, "pair_id": pair_id, "restored": restored}
+    response: dict = {"ok": True, "pair_id": pair_id, "restored": result["restored"]}
+    if result["restored"] > 0:
+        response["restored_to"] = {"out": result.get("out"), "in": result.get("in")}
+    return response
 
 
 # ---------------------------------------------------------------------------

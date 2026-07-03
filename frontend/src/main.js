@@ -157,7 +157,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!search) search = createSearch({ root: document });
         search.load();
       } else if (view === 'transfers') {
-        if (!transfers) transfers = createTransfers({ root: document });
+        // notifyToast is created later in this same handler, but view switches only
+        // happen after DOMContentLoaded finishes, so the binding is initialised.
+        if (!transfers) {
+          transfers = createTransfers({
+            root: document,
+            toastFn: (spec) => notifyToast.show(spec),
+          });
+        }
         transfers.load();
       } else if (view === 'monthly') {
         if (!monthly) monthly = createMonthly({ root: document });

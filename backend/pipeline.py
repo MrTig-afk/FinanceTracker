@@ -558,6 +558,12 @@ def run_pipeline(
     else:
         _notify(store, "processed", count=categorised)
 
+    # Newly matched internal transfers are excluded from spending silently by the
+    # store; tell the owner so the exclusion is never a mystery (count only — no
+    # amounts, no descriptions). Re-runs create no new pairs, so this stays quiet.
+    if transfer_result.pairs_created > 0:
+        _notify(store, "transfer_detected", count=transfer_result.pairs_created)
+
     # Additional, guarded budget-threshold alerts for the latest data month. Only on
     # this non-noop path — a re-ingested identical file returns early above and stays
     # a pure no-op (no check, no claim, no send).

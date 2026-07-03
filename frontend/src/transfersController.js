@@ -29,11 +29,14 @@ const _BANK_LABEL = { commbank: 'CommBank', westpac: 'Westpac' };
  * Requires the following elements to be present in `root`:
  *   #transfers-message  (empty / count / error banner)
  *   #transfers-list     (pairs container)
+ *   #transfers-card     (card around the list; hidden while there are no pairs,
+ *                        so no empty gray box sits under the banner)
  *
  * @param {{
  *   root?: Document,
  *   fetchFn?: () => Promise<object>,
  *   untagFn?: (pairId: number) => Promise<object>,
+ *   toastFn?: ((spec: {title?: string, body?: string, kind?: string}) => void)|null,
  * }} options
  * @returns {{ load(): void, destroy(): void }}
  */
@@ -41,11 +44,13 @@ export function createTransfers({
   root = document,
   fetchFn = fetchTransfers,
   untagFn = postTransferUntag,
+  toastFn = null,
 } = {}) {
   const doc = root.documentElement ? root : root.ownerDocument ?? document;
 
   const messageEl = root.getElementById('transfers-message');
   const listEl = root.getElementById('transfers-list');
+  const cardEl = root.getElementById('transfers-card');
 
   // Monotonic token so a slow/out-of-order response is discarded if load() ran again.
   let _token = 0;
@@ -63,10 +68,24 @@ export function createTransfers({
 
   function _clearList() {
     if (listEl) listEl.textContent = '';
+    if (cardEl) cardEl.hidden = true;
   }
 
   function _bankLabel(bank) {
     return _BANK_LABEL[bank] ?? bank;
+  }
+
+  function _legLabel(text) {
+    const label = doc.createElement('span');
+    label.className = 'transfer-leg-label';
+    label.textContent = text;
+    return label;
+  }
+
+  // Where an untagged leg went, for the confirmation toast. null = the leg had no
+  // category before it was tagged (it reappears as Uncategorised until the next run).
+  function _restoredName(category) {
+    return category ?? 'Uncategorised';
   }
 
   function _renderPair(pair) {
@@ -82,12 +101,14 @@ export function createTransfers({
     card.appendChild(caption);
 
     if (pair.out) {
+      card.appendChild(_legLabel(`From ${_bankLabel(pair.out.bank)}`));
       const outRow = doc.createElement('div');
       outRow.className = 'cat-drawer-row';
       outRow.appendChild(buildRowMain(doc, pair.out));
       card.appendChild(outRow);
     }
     if (pair.in) {
+      card.appendChild(_legLabel(`To ${_bankLabel(pair.in.bank)}`));
       const inRow = doc.createElement('div');
       inRow.className = 'cat-drawer-row';
       inRow.appendChild(buildRowMain(doc, pair.in));
@@ -107,7 +128,20 @@ export function createTransfers({
   async function _untag(pair, button, caption) {
     button.disabled = true;
     try {
-      await untagFn(pair.id);
+      const result = await untagFn(pair.id);
+      // Tell the owner where each leg went — an untagged pair vanishing from this
+      // list with no explanation reads as data loss.
+      if (typeof toastFn === 'function') {
+        const restored = result && result.restored_to ? result.restored_to : {};
+        const outName = _restoredName(restored.out);
+        const inName = _restoredName(restored.in);
+        const uncategorised = outName === 'Uncategorised' || inName === 'Uncategorised';
+        const where = `${_bankLabel(pair.out?.bank)} leg -> ${outName} · ${_bankLabel(pair.in?.bank)} leg -> ${inName}.`;
+        const note = uncategorised
+          ? ' Uncategorised rows are sorted on the next run or via Settings -> retry.'
+          : '';
+        toastFn({ title: 'Not a transfer', body: `${where}${note}`, kind: 'info' });
+      }
       load();
     } catch {
       // Never expose raw error/stack — fixed safe message only. Re-enable so the
@@ -124,6 +158,7 @@ export function createTransfers({
   function _render(data) {
     _clearList();
     if (!listEl) return;
+    if (cardEl) cardEl.hidden = false;
     for (const pair of data.pairs ?? []) {
       listEl.appendChild(_renderPair(pair));
     }

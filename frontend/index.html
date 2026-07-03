@@ -176,7 +176,9 @@
                      autocomplete="off" spellcheck="false" aria-label="Search transactions" />
             </div>
             <p id="search-message" class="message-banner"></p>
-            <section class="card">
+            <!-- Hidden until there are rows to show — an empty card reads as a
+                 stray gray box, especially on the phone. -->
+            <section id="search-results-card" class="card" hidden>
               <div id="search-results" class="cat-drawer-body"></div>
             </section>
           </section>
@@ -184,7 +186,8 @@
           <!-- Transfers view (v6 — internal cross-bank transfer netting) -->
           <section class="view" data-view="transfers" hidden>
             <p id="transfers-message" class="message-banner"></p>
-            <section class="card">
+            <!-- Hidden until there are pairs to show (same no-empty-gray-box rule). -->
+            <section id="transfers-card" class="card" hidden>
               <div id="transfers-list" class="cat-drawer-body"></div>
             </section>
           </section>

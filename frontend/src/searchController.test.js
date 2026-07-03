@@ -19,7 +19,7 @@ const SEARCH_HTML = `
     <input id="search-input" type="search" class="search-input" />
   </div>
   <p id="search-message" class="message-banner"></p>
-  <section class="card">
+  <section id="search-results-card" class="card" hidden>
     <div id="search-results" class="cat-drawer-body"></div>
   </section>
 `;
@@ -170,6 +170,26 @@ describe('results', () => {
     await vi.advanceTimersByTimeAsync(250);
     expect($('search-results').querySelector('select')).toBeNull();
     expect($('search-results').querySelector('.cat-drawer-picker')).toBeNull();
+  });
+
+  it('shows the results card only while there are rows (no empty gray box)', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(CANNED_RESULTS)
+      .mockResolvedValueOnce(EMPTY_RESULTS);
+    controller = createSearch({ root: document, fetchFn, debounceMs: 250 });
+    controller.load();
+    expect($('search-results-card').hidden).toBe(true); // initial hint state
+
+    type('coffee');
+    await vi.advanceTimersByTimeAsync(250);
+    expect($('search-results-card').hidden).toBe(false); // rows visible
+
+    type('zzz');
+    await vi.advanceTimersByTimeAsync(250);
+    expect($('search-results-card').hidden).toBe(true); // back to no box
+
+    type('');
+    expect($('search-results-card').hidden).toBe(true); // blank input clears too
   });
 });
 

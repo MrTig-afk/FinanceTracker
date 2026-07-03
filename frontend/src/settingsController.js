@@ -40,6 +40,7 @@ const NOTIFICATION_TYPES = [
   ['monthly_reminder', 'Monthly upload reminder'],
   ['budget_approaching', 'Budget approaching (80%)'],
   ['budget_exceeded', 'Budget exceeded'],
+  ['transfer_detected', 'Transfers detected'],
   ['subscription_new', 'New subscription detected'],
   ['subscription_price_change', 'Subscription price change'],
   ['income_missed', 'Expected deposit missed'],

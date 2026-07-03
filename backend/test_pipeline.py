@@ -1684,6 +1684,36 @@ class TestInternalTransferNetting:
         assert second.transfer_pairs == 0
         assert fake.call_count == calls_after_first  # zero further LLM calls
 
+    def test_transfer_detected_notification_fires_once(self, tmp_path, monkeypatch):
+        """New pairs notify (count only); a no-op re-run stays quiet."""
+        calls = _capture_notifications(monkeypatch)
+        store = Store(":memory:")
+        fake = FakeAnalyserClient("Groceries")
+        uploads = _xfer_mixed_uploads()
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        transfer_calls = [c for c in calls if c[0] == "transfer_detected"]
+        assert len(transfer_calls) == 1
+        assert transfer_calls[0][1].get("count") == 1
+
+        run_pipeline(
+            uploads,
+            store=store,
+            analyser_client=fake,
+            drive_service=None,
+            output_dir=tmp_path,
+            sanitise_log_dir=tmp_path,
+        )
+        store.close()
+        # The idempotent re-run created no pairs, so no second notification.
+        assert len([c for c in calls if c[0] == "transfer_detected"]) == 1
+
     def test_transfer_only_upload_zero_llm_but_workbook_rebuilt(self, tmp_path):
         store = Store(":memory:")
         fake = FakeAnalyserClient("Groceries")

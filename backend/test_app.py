@@ -1837,7 +1837,13 @@ class TestTransfersEndpoints:
 
         r = api_client.post(f"/transfers/{pair_id}/untag")
         assert r.status_code == 200
-        assert r.json() == {"ok": True, "pair_id": pair_id, "restored": 2}
+        assert r.json() == {
+            "ok": True,
+            "pair_id": pair_id,
+            "restored": 2,
+            # Where each leg went, so the UI can tell the owner (null = Uncategorised).
+            "restored_to": {"out": "Groceries", "in": None},
+        }
 
         # The restored spending row is counted by /summary again.
         body = api_client.get("/summary?month=2026-06").json()

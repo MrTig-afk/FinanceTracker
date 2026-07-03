@@ -16,7 +16,9 @@ import { formatCurrency } from './summary.js';
 
 const TRANSFERS_HTML = `
   <p id="transfers-message" class="message-banner"></p>
-  <div id="transfers-list" class="cat-drawer-body"></div>
+  <section id="transfers-card" class="card" hidden>
+    <div id="transfers-list" class="cat-drawer-body"></div>
+  </section>
 `;
 
 // ---------------------------------------------------------------------------
@@ -113,6 +115,33 @@ describe('render', () => {
     expect($('transfers-message').textContent).toBe('2 matched pairs excluded from spending');
   });
 
+  it('labels each leg with its direction and bank', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRANSFERS);
+    controller = createTransfers({ root: document, fetchFn });
+    controller.load();
+    await flush();
+
+    const labels = [...pairs()[0].querySelectorAll('.transfer-leg-label')].map(
+      (el) => el.textContent,
+    );
+    expect(labels).toEqual(['From CommBank', 'To Westpac']);
+  });
+
+  it('shows the list card only while there are pairs (no empty gray box)', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(CANNED_TRANSFERS)
+      .mockResolvedValueOnce(EMPTY_TRANSFERS);
+    controller = createTransfers({ root: document, fetchFn });
+
+    controller.load();
+    await flush();
+    expect($('transfers-card').hidden).toBe(false);
+
+    controller.load();
+    await flush();
+    expect($('transfers-card').hidden).toBe(true);
+  });
+
   it('renders descriptions via textContent only (no HTML injection)', async () => {
     const injected = {
       count: 1,
@@ -185,6 +214,67 @@ describe('untag', () => {
     expect(fetchFn).toHaveBeenCalledTimes(2);
     expect(pairs().length).toBe(0);
     expect($('transfers-message').textContent).toBe(_EMPTY);
+  });
+
+  it('toasts where each leg went, mapping null to Uncategorised with the retry note', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRANSFERS);
+    const untagFn = vi.fn().mockResolvedValue({
+      ok: true,
+      pair_id: 7,
+      restored: 2,
+      restored_to: { out: 'Groceries', in: null },
+    });
+    const toastFn = vi.fn();
+    controller = createTransfers({ root: document, fetchFn, untagFn, toastFn });
+    controller.load();
+    await flush();
+
+    fetchFn.mockResolvedValueOnce(EMPTY_TRANSFERS);
+    pairs()[0].querySelector('.transfer-untag').click();
+    await flush();
+
+    expect(toastFn).toHaveBeenCalledTimes(1);
+    const spec = toastFn.mock.calls[0][0];
+    expect(spec.title).toBe('Not a transfer');
+    expect(spec.body).toContain('CommBank leg -> Groceries');
+    expect(spec.body).toContain('Westpac leg -> Uncategorised');
+    expect(spec.body).toContain('sorted on the next run');
+  });
+
+  it('omits the retry note when both legs restore to real categories', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRANSFERS);
+    const untagFn = vi.fn().mockResolvedValue({
+      ok: true,
+      pair_id: 7,
+      restored: 2,
+      restored_to: { out: 'Groceries', in: 'Income' },
+    });
+    const toastFn = vi.fn();
+    controller = createTransfers({ root: document, fetchFn, untagFn, toastFn });
+    controller.load();
+    await flush();
+
+    fetchFn.mockResolvedValueOnce(EMPTY_TRANSFERS);
+    pairs()[0].querySelector('.transfer-untag').click();
+    await flush();
+
+    const spec = toastFn.mock.calls[0][0];
+    expect(spec.body).toContain('CommBank leg -> Groceries');
+    expect(spec.body).toContain('Westpac leg -> Income');
+    expect(spec.body).not.toContain('sorted on the next run');
+  });
+
+  it('does not toast on a failed untag', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(CANNED_TRANSFERS);
+    const untagFn = vi.fn().mockRejectedValue(new Error('boom'));
+    const toastFn = vi.fn();
+    controller = createTransfers({ root: document, fetchFn, untagFn, toastFn });
+    controller.load();
+    await flush();
+
+    pairs()[0].querySelector('.transfer-untag').click();
+    await flush();
+    expect(toastFn).not.toHaveBeenCalled();
   });
 
   it('re-enables the button and shows a fixed error when untag fails', async () => {

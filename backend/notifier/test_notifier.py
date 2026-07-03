@@ -712,6 +712,16 @@ class TestBudgetNotificationCopy:
         assert "budget_approaching" in NOTIFICATION_TYPES
         assert "budget_exceeded" in NOTIFICATION_TYPES
 
+    def test_transfer_detected_in_catalog_count_only(self):
+        # v6 follow-up: netted transfers must never be a silent mystery — but the
+        # notice still carries a count only: no amounts, no descriptions, no banks.
+        assert "transfer_detected" in NOTIFICATION_TYPES
+        p = build_notification("transfer_detected", count=2)
+        assert p["type"] == "transfer_detected"
+        assert p["title"] and p["body"]
+        assert "$" not in p["body"]
+        assert "".join(ch for ch in p["body"] if ch.isdigit()) == "2"
+
     def test_missing_detail_falls_back_without_leaking(self):
         # No category supplied → a generic placeholder, never an amount/description.
         p = build_notification("budget_approaching", count=80)

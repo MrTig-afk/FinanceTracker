@@ -1253,14 +1253,16 @@ class Store:
             for row in rows
         ]
 
-    def untag_transfer_pair(self, pair_id: int) -> int | None:
+    def untag_transfer_pair(self, pair_id: int) -> dict | None:
         """Dismiss one transfer pair, restoring each leg's previous category.
 
-        Returns None when no pair has that id (endpoint 404). Returns 0 when the pair
-        is already dismissed (idempotent no-op). Otherwise restores both legs to their
-        captured prev_category_* (NULL allowed -> the row becomes a normal orphan the
-        retry button can re-categorise) via a direct UPDATE, marks the pair
-        'dismissed', commits once, and returns 2.
+        Returns None when no pair has that id (endpoint 404). Returns
+        {"restored": 0} when the pair is already dismissed (idempotent no-op).
+        Otherwise restores both legs to their captured prev_category_* (NULL
+        allowed -> the row becomes a normal orphan the retry button can
+        re-categorise) via a direct UPDATE, marks the pair 'dismissed', commits
+        once, and returns {"restored": 2, "out": <category|None>, "in":
+        <category|None>} so the UI can tell the owner where each leg went.
 
         A dismissed pair's rows stay excluded from future detect_transfers() (the
         exclusion covers both statuses), so an untagged pair is never silently
@@ -1274,7 +1276,7 @@ class Store:
         if row is None:
             return None
         if row["status"] == "dismissed":
-            return 0
+            return {"restored": 0}
 
         self.conn.execute(
             "UPDATE transactions SET category = ? WHERE id = ?",
@@ -1289,7 +1291,11 @@ class Store:
             (pair_id,),
         )
         self.conn.commit()
-        return 2
+        return {
+            "restored": 2,
+            "out": row["prev_category_out"],
+            "in": row["prev_category_in"],
+        }
 
     # ------------------------------------------------------------------
     # Reporting (dashboard / Excel builder)

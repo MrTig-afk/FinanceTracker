@@ -23,9 +23,11 @@ const _ERROR = 'Could not run search.';
  * Wire the Search view.
  *
  * Requires the following elements to be present in `root`:
- *   #search-input    (text/search input)
- *   #search-message  (hint / count / error banner)
- *   #search-results  (results container)
+ *   #search-input         (text/search input)
+ *   #search-message       (hint / count / error banner)
+ *   #search-results       (results container)
+ *   #search-results-card  (card around the results; hidden while there are none,
+ *                          so no empty gray box sits under the input)
  *
  * @param {{
  *   root?: Document,
@@ -40,6 +42,7 @@ export function createSearch({ root = document, fetchFn = fetchSearch, debounceM
   const inputEl = root.getElementById('search-input');
   const messageEl = root.getElementById('search-message');
   const resultsEl = root.getElementById('search-results');
+  const cardEl = root.getElementById('search-results-card');
 
   let _timer = null;
   // Monotonic token so a slow/out-of-order response can be discarded if the input
@@ -59,11 +62,13 @@ export function createSearch({ root = document, fetchFn = fetchSearch, debounceM
 
   function _clearResults() {
     if (resultsEl) resultsEl.textContent = '';
+    if (cardEl) cardEl.hidden = true;
   }
 
   function _renderResults(data) {
     _clearResults();
     if (!resultsEl) return;
+    if (cardEl) cardEl.hidden = false;
     for (const t of data.transactions ?? []) {
       const row = doc.createElement('div');
       row.className = 'cat-drawer-row';
