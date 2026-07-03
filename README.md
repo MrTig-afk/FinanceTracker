@@ -214,16 +214,12 @@ On macOS, use a launchd LaunchAgent with `RunAtLoad` and `KeepAlive`; on Linux, 
 
 The current build covers the full loop described above, plus: monthly and yearly views with period-over-period changes, category trend charts, a category drill-down drawer with one-tap corrections (shown only when learned corrections are enabled in Settings), per-category merchant hints, notifications (in-app toasts while the app is focused, Web Push when backgrounded), a Settings tab (per-notification-type toggles, CSV backup and reset, categoriser test, learned-corrections management), `.xlsx` statement upload, and content-based bank detection.
 
-## Roadmap (v6, in progress)
+Newest additions (v6), all local heuristics over data already on your machine — nothing new is sent off-machine:
 
-In build order:
-
-1. **Transaction search**: full-text search across every stored transaction (SQLite FTS5), reusing the drawer's row rendering.
-2. **Internal transfer netting**: money moved between your own accounts shows up in both banks' CSVs and double-counts as spending. Matched opposite-sign pairs within a small date window get tagged as transfers and excluded from the totals, with a review view to untag false matches.
-3. **Budget alerts**: per-category monthly budgets set in Settings, checked after each pipeline run, delivered through the existing notification channels ("Dining Out is at 85% with 9 days left").
-4. **Subscription watch**: recurring-merchant detection over the stored rows that flags a new subscription appearing, a price change on an existing one, or an expected income deposit that did not arrive.
-
-Everything on the list follows the same rules as the rest of the app: local heuristics over data already on your machine, synthetic-data tests, and nothing new sent off-machine.
+- **Transaction search**: full-text search across every stored transaction (SQLite FTS5, with a plain-LIKE fallback when FTS5 is unavailable).
+- **Internal transfer netting**: money moved between your own accounts shows up in both banks' CSVs and double-counts as spending. Matched opposite-sign pairs within a small date window are tagged as transfers and excluded from the totals — and from the categorisation payload entirely. A Transfers view lists each pair with a "Not a transfer" undo, and a notification tells you when new pairs are netted.
+- **Budget alerts**: per-category monthly budgets set in Settings, checked after each run, fired once per category per month at 80% and 100% through the normal notification channels. Alert payloads carry only a category name and a percent — never amounts or descriptions.
+- **Subscription watch**: recurring-merchant detection that flags a new subscription appearing, a price change on an existing one, or an expected income deposit that did not arrive.
 
 ## License
 
