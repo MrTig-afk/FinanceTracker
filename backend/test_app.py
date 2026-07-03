@@ -1870,6 +1870,44 @@ class TestTransfersEndpoints:
         # No transfers remain after reset.
         assert api_client.get("/transfers").json()["count"] == 0
 
+    @staticmethod
+    def _leg_id(fingerprint: str) -> int:
+        """Row id of a seeded leg, read via a separate Store (thread-bound app store)."""
+        from backend.store import Store
+
+        with Store(os.environ["SQLITE_PATH"]) as store:
+            row = store.conn.execute(
+                "SELECT id FROM transactions WHERE txn_fingerprint = ?", (fingerprint,)
+            ).fetchone()
+            return int(row["id"])
+
+    def test_category_override_rejects_transfer_leg_409(self, api_client):
+        from backend.store import Store
+
+        self._seed_pair(out_category="Groceries")
+        leg_id = self._leg_id("tpo")
+
+        r = api_client.post(
+            "/category-override", json={"id": leg_id, "category": "Dining Out"}
+        )
+        assert r.status_code == 409
+        assert r.json()["detail"] == "transaction is a transfer leg; untag the pair first"
+
+        # Leg untouched, pair still active — no asymmetric netting possible.
+        with Store(os.environ["SQLITE_PATH"]) as store:
+            assert store.transaction_category(leg_id) == "Transfer"
+        assert api_client.get("/transfers").json()["count"] == 1
+
+    def test_category_override_allowed_after_untag(self, api_client):
+        pair_id = self._seed_pair(out_category="Groceries")
+        leg_id = self._leg_id("tpo")
+
+        assert api_client.post(f"/transfers/{pair_id}/untag").status_code == 200
+        r = api_client.post(
+            "/category-override", json={"id": leg_id, "category": "Dining Out"}
+        )
+        assert r.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # TestBudgetsEndpoints — GET/PUT /budgets  (v6 feature 3)

@@ -92,7 +92,7 @@ from backend.data_source import Bank
 from backend.drive_uploader import is_configured
 from backend.notifier import NOTIFICATION_TYPES, send_monthly_reminder, send_notification
 from backend.pipeline import RunReport, UploadedFile, retry_uncategorised, run_pipeline
-from backend.store import BUDGET_CATEGORIES, Store, TAXONOMY
+from backend.store import BUDGET_CATEGORIES, Store, TAXONOMY, TRANSFER_CATEGORY
 from backend.subscriptions import check_subscriptions
 
 # The pure scrub helpers are reused (not the full sanitise() batch path) to clean a
@@ -666,6 +666,14 @@ async def category_override(body: CategoryOverrideIn):
     raw = store.transaction_description(key)
     if raw is None:
         raise HTTPException(status_code=404, detail="transaction not found")
+
+    # Transfer legs are managed by their pair record: overriding one leg would leave
+    # the pair asymmetric, and a later untag would then restore a stale category.
+    # Reject with 409 — the owner untags via POST /transfers/{id}/untag first.
+    if store.transaction_category(key) == TRANSFER_CATEGORY:
+        raise HTTPException(
+            status_code=409, detail="transaction is a transfer leg; untag the pair first"
+        )
 
     # Set the category (local write only).
     store.set_categories({key: body.category})

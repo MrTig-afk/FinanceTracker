@@ -509,6 +509,23 @@ class Store:
             ).fetchone()
         return row["description"] if row is not None else None
 
+    def transaction_category(self, key: str | int) -> str | None:
+        """Return the current category for a transaction by row id (int) or fingerprint (str).
+
+        Returns None both when no row matches and when the row is uncategorised —
+        callers that need existence should check ``transaction_description`` first
+        (the override endpoint already does). LOCAL-ONLY read.
+        """
+        if isinstance(key, int):
+            row = self.conn.execute(
+                "SELECT category FROM transactions WHERE id = ?", (key,)
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT category FROM transactions WHERE txn_fingerprint = ?", (key,)
+            ).fetchone()
+        return row["category"] if row is not None else None
+
     def list_corrections(self) -> list[dict]:
         """Return all stored corrections newest-first for the settings/corrections UI.
 
