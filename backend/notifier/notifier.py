@@ -14,10 +14,15 @@ the default shipped state (PUSH_ENABLED unset, keys blank).
 Privacy — HARD rule
 --------------------
 The push payload is a structured ``{"type", "title", "body"}`` object built by
-``build_notification`` from the fixed catalog. Copy is COUNTS + STATUS ONLY: it may
-name a count ("N transactions"), a bank ("CommBank"/"Westpac"), or a month
-("YYYY-MM") but NEVER amounts, balances, descriptions, categories, merchant/payee
-names, or account info. No emojis, no em dashes. The service worker routes on the
+``build_notification`` from the fixed catalog. Copy is COUNTS + STATUS ONLY, plus
+(for budget + subscription types) a taxonomy category name and an integer percentage:
+it may name a count ("N transactions"), a bank ("CommBank"/"Westpac"), a month
+("YYYY-MM"), a taxonomy category name ("Groceries"), an integer percentage ("80%"), or
+one of the fixed direction words "up"/"down" but NEVER dollar amounts, balances,
+transaction descriptions, merchant/payee names, or account info. In particular the
+subscription types (subscription_new / subscription_price_change / income_missed) are
+limited to a count, an integer percent, and the fixed words "up"/"down" — never a
+merchant name or an amount. No emojis, no em dashes. The service worker routes on the
 ``type`` field (in-app banner vs OS notification). Subscriptions are read from the
 local Store only; this module never reads raw transaction data.
 
@@ -58,11 +63,13 @@ logger = logging.getLogger(__name__)
 # Notification content — HARD rule: COUNTS + STATUS ONLY.
 # ---------------------------------------------------------------------------
 # Every notification body carries only counts (N transactions) and status words
-# (which bank, which month) — NEVER amounts, balances, merchant/payee names,
-# descriptions, categories, account info, or dates beyond a "YYYY-MM" month tag.
-# No emojis, no em dashes (plain hyphens only). The service worker routes on the
-# structured `type` field (in-app banner vs OS notification); `title`/`body` are
-# the human-visible copy.
+# (which bank, which month) — plus, for budget + subscription types, a taxonomy
+# category name, an integer percentage, and (for a subscription price change) the fixed
+# direction word "up"/"down" — NEVER dollar amounts, balances, merchant/payee names,
+# transaction descriptions, account info, or dates beyond a "YYYY-MM" month tag. No
+# emojis, no em dashes (plain hyphens only). The service worker routes on the structured
+# `type` field (in-app banner vs OS notification); `title`/`body` are the human-visible
+# copy.
 
 NOTIFICATION_TITLE = "FinanceTracker"
 # Legacy generic body retained for backward reference; the live catalog below
@@ -81,6 +88,11 @@ NOTIFICATION_TYPES = (
     "duplicate_noop",
     "generic_error",
     "monthly_reminder",
+    "budget_approaching",
+    "budget_exceeded",
+    "subscription_new",
+    "subscription_price_change",
+    "income_missed",
 )
 
 _PLACEHOLDER_PUBLIC_KEY = "REPLACE_WITH_VAPID_PUBLIC_KEY"
@@ -110,8 +122,11 @@ def build_notification(
     """Build the structured push payload for one catalog type.
 
     Returns ``{"type": ntype, "title": str, "body": str}``. The body is COUNTS +
-    STATUS ONLY: it may name a count, a bank ("CommBank"/"Westpac"), or a month
-    ("YYYY-MM") but NEVER amounts, merchants, descriptions, categories, or names.
+    STATUS ONLY (plus, for budget + subscription types, a taxonomy category name, an
+    integer percentage, and the fixed direction word "up"/"down"): it may name a count,
+    a bank ("CommBank"/"Westpac"), a month ("YYYY-MM"), a category name, an integer
+    percentage, or "up"/"down" but NEVER dollar amounts, balances, merchants,
+    transaction descriptions, or account info.
 
     Raises ValueError for an unknown type (fail loud in code; callers in the
     pipeline pass only known constants).
@@ -153,6 +168,27 @@ def build_notification(
     elif ntype == "monthly_reminder":
         title = "New month"
         body = "New month - time to export and upload this month's statements."
+    elif ntype == "budget_approaching":
+        cat = detail or "A category"
+        title = "Budget alert"
+        body = f"{cat} is at {n}% of its monthly budget."
+    elif ntype == "budget_exceeded":
+        cat = detail or "A category"
+        title = "Budget exceeded"
+        body = f"{cat} has passed its monthly budget ({n}% spent)."
+    elif ntype == "subscription_new":
+        title = "New subscription detected"
+        body = f"Detected {n} new recurring payment(s) - open the app to see the details."
+    elif ntype == "subscription_price_change":
+        direction = detail if detail in ("up", "down") else "up or down"
+        title = "Subscription price change"
+        body = (
+            f"A recurring payment's price went {direction} by about {n}% - "
+            f"open the app for details."
+        )
+    elif ntype == "income_missed":
+        title = "Expected deposit not seen"
+        body = "A regular income deposit did not arrive last month - open the app to check."
     else:
         raise ValueError(f"unknown notification type: {ntype!r}")
 

@@ -16,6 +16,8 @@ import { createCategoryContext } from './categoryContextController.js';
 import { createMonthly } from './monthlyController.js';
 import { createYearly } from './yearlyController.js';
 import { createTrends } from './trendsController.js';
+import { createSearch } from './searchController.js';
+import { createTransfers } from './transfersController.js';
 import { createOverviewTrend } from './overviewTrendController.js';
 import { createSettings } from './settingsController.js';
 import { createPushController } from './push.js';
@@ -134,6 +136,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let monthly = null;
   let yearly = null;
   let trends = null;
+  let search = null;
+  let transfers = null;
   let settings = null;
 
   const views = initViews({
@@ -149,6 +153,12 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (view === 'trends') {
         if (!trends) trends = createTrends({ root: document });
         trends.load();
+      } else if (view === 'search') {
+        if (!search) search = createSearch({ root: document });
+        search.load();
+      } else if (view === 'transfers') {
+        if (!transfers) transfers = createTransfers({ root: document });
+        transfers.load();
       } else if (view === 'monthly') {
         if (!monthly) monthly = createMonthly({ root: document });
         monthly.load();

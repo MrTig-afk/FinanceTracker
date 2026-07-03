@@ -172,7 +172,15 @@ class TestResetAllData:
             store.record_correction("SYNTH MERCHANT", "Groceries")
 
             counts = store.reset_all_data()
-            assert counts == {"transactions": 2, "file_fingerprints": 1, "corrections": 1}
+            assert counts == {
+                "transactions": 2,
+                "file_fingerprints": 1,
+                "corrections": 1,
+                "transfer_pairs": 0,
+                "budget_alert_fired": 0,
+                "subscriptions": 0,
+                "subscription_event_fired": 0,
+            }
 
             assert store.all_transactions_for_export() == []
             assert store.list_corrections() == []
@@ -202,5 +210,13 @@ class TestResetAllData:
     def test_empty_db_reset_is_safe_noop_counts(self):
         with Store(":memory:") as store:
             counts = store.reset_all_data()
-            assert counts == {"transactions": 0, "file_fingerprints": 0, "corrections": 0}
+            assert counts == {
+                "transactions": 0,
+                "file_fingerprints": 0,
+                "corrections": 0,
+                "transfer_pairs": 0,
+                "budget_alert_fired": 0,
+                "subscriptions": 0,
+                "subscription_event_fired": 0,
+            }
             assert len(store.get_category_context()) == 8

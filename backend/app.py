@@ -9,6 +9,10 @@ GET  /month     Monthly breakdown + month-over-month comparison (latest or ?ym=Y
 GET  /year      Yearly breakdown + year-over-year comparison (latest or ?y=YYYY).
 GET  /trends    Per-category spending across a window of recent months
                 (?months=1-24, default 6; ?end=YYYY-MM, default latest month).
+GET  /search    Full-text search over the owner's own transactions (LOCAL, read-only;
+                ?q=free text, optional ?month=YYYY-MM).
+GET  /transfers Internal cross-bank transfer pairs netted out of spending (LOCAL, read-only).
+POST /transfers/{pair_id}/untag  Undo one transfer match, restoring each leg's category.
 GET  /category-context  The 9 canonical categories with stored hints (D1/D2).
 PUT  /category-context  Replace-all of the 9 canonical categories' hints.
 POST /category-override Override one transaction's category + remember the correction.
@@ -19,6 +23,8 @@ POST /notify/monthly-reminder  Fire the "new month, upload your statements" push
 GET  /settings  Owner preferences: corrections_enabled (Feature B gate, default OFF)
                 + per-type notification toggles (default ON).
 PUT  /settings  Partial update of the above (unknown notification keys ignored).
+GET  /budgets   Per-category monthly budgets (budgetable category list + set amounts).
+PUT  /budgets   Partial update of budgets ({category: amount|null}; null clears).
 GET  /export/transactions.csv  Local CSV download of ALL transactions (owner's data).
 POST /reset     Wipe all transaction data (confirm=='RESET'); keep device + prefs.
 GET  /categoriser/status  configured bool + uncategorised_count (no network).
@@ -41,6 +47,9 @@ Privacy contract
   same local-serve posture as /summary. No new off-machine call.
 - GET /trends is another LOCAL, read-only aggregation of the same store — same
   local-serve posture as /summary. No new off-machine call.
+- GET /search is a LOCAL, read-only full-text lookup over the same store — same
+  local-serve posture as /summary. Raw descriptions are the owner's own data,
+  served only to the owner's own client; nothing here is ever sent off-machine.
 - POST /push/subscribe and /push/unsubscribe store/remove the caller's OWN device
   Web Push subscription in local SQLite only — no off-machine call here. The scaffold
   that WOULD later send a push (backend/notifier) is feature-flagged OFF by default
@@ -67,6 +76,7 @@ import os
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
 import uvicorn
@@ -77,11 +87,13 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from backend.analyser import AnalyserError, OpenRouterClient
+from backend.budget_alerts import check_budget_alerts
 from backend.data_source import Bank
 from backend.drive_uploader import is_configured
 from backend.notifier import NOTIFICATION_TYPES, send_monthly_reminder, send_notification
 from backend.pipeline import RunReport, UploadedFile, retry_uncategorised, run_pipeline
-from backend.store import Store, TAXONOMY
+from backend.store import BUDGET_CATEGORIES, Store, TAXONOMY
+from backend.subscriptions import check_subscriptions
 
 # The pure scrub helpers are reused (not the full sanitise() batch path) to clean a
 # single raw description before it is stored as a reusable correction example. This
@@ -126,6 +138,11 @@ async def lifespan(app: FastAPI):
     # Open the single long-lived SQLite connection for the app's lifetime.
     # create_parents=True so ./data/ is created on first run (gitignored path).
     app.state.store = Store(create_parents=True)
+    # One-time backfill so a pre-feature DB gets its internal transfers netted at
+    # startup without waiting for the next ingest. Deterministic, idempotent, and
+    # LOCAL-ONLY (zero network); no workbook rebuild here (workbooks refresh on the
+    # next pipeline run).
+    app.state.store.detect_transfers()
     app.state.started_at = datetime.now(timezone.utc)
     app.state.last_report: RunReport | None = None
     app.state.last_run_at: datetime | None = None
@@ -214,6 +231,16 @@ class SettingsIn(BaseModel):
 
     corrections_enabled: bool | None = None
     notifications: dict[str, bool] | None = None
+
+
+class BudgetsIn(BaseModel):
+    """Partial budgets update: {category: amount|null}. null (or "") clears one budget.
+
+    Values may arrive as a JSON string ("600.00"), number, or null. The handler
+    validates each entry (Decimal, > 0, <= 10_000_000) before writing anything.
+    """
+
+    budgets: dict[str, str | float | int | None]
 
 
 class ResetIn(BaseModel):
@@ -414,6 +441,72 @@ async def category_transactions(
 
 
 # ---------------------------------------------------------------------------
+# GET /search  (v6 — local full-text transaction search)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/search")
+async def search(
+    q: Annotated[str, Query(description="free-text query")],
+    month: Annotated[str | None, Query(description="YYYY-MM")] = None,
+):
+    """Full-text search over the owner's own transactions (LOCAL, read-only).
+
+    Same local-serve posture as /category-transactions: the owner's data served to
+    the owner's own localhost/Tailscale client, never sent off-machine. No OpenRouter,
+    no network. Blank q returns the empty shape (not an error). Malformed month -> 400.
+
+    Query params:
+        q     — free-text query (whitespace-split, implicit-AND, prefix match).
+        month — optional 'YYYY-MM' filter. Omit to search all months.
+    """
+    if month is not None and not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+
+    return app.state.store.search_transactions(q, month)
+
+
+# ---------------------------------------------------------------------------
+# GET /transfers, POST /transfers/{pair_id}/untag  (v6 — internal transfer netting)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/transfers")
+async def transfers():
+    """List internal cross-bank transfer pairs the app has netted out of spending.
+
+    LOCAL, read-only view of the owner's own store — same local-serve posture as
+    /category-transactions. Descriptions/amounts are the owner's own data served to
+    the owner's own localhost/Tailscale client; nothing here is ever sent off-machine.
+    No OpenRouter, no network. Empty DB -> {"count": 0, "pairs": []}.
+    """
+    pairs = app.state.store.list_transfer_pairs()
+    return {"count": len(pairs), "pairs": pairs}
+
+
+@app.post("/transfers/{pair_id}/untag")
+async def untag_transfer(pair_id: int):
+    """Undo one transfer match ("Not a transfer"), restoring each leg's category.
+
+    LOCAL-ONLY edit of the owner's own store — same local-serve posture as /reclassify.
+    Restores each leg's previous category (may be NULL, in which case the row reappears
+    as Uncategorised and the retry button can categorise it) and dismisses the pair.
+
+    Unknown id -> 404. Already dismissed -> 200 with restored 0 (idempotent). Success
+    -> 200 with restored 2. FastAPI coerces pair_id; a non-int path is an automatic 422.
+    """
+    restored = app.state.store.untag_transfer_pair(pair_id)
+    if restored is None:
+        raise HTTPException(status_code=404, detail="transfer pair not found")
+    # A successful untag restores each leg's previous category, which can change a
+    # budgeted category's spend — guarded budget-alert check (never raises).
+    check_budget_alerts(app.state.store)
+    # Restoring a non-Transfer row can also affect recurring-merchant detection — guarded.
+    check_subscriptions(app.state.store)
+    return {"ok": True, "pair_id": pair_id, "restored": restored}
+
+
+# ---------------------------------------------------------------------------
 # GET /month  (v2 Pass 1 — monthly breakdown + month-over-month comparison)
 # ---------------------------------------------------------------------------
 
@@ -519,6 +612,10 @@ async def reclassify(
     else:
         store.revert_fuel_dining_rule(month)
 
+    # Moving rows between Transport and Dining Out changes those categories' spend —
+    # guarded budget-alert check (never raises).
+    check_budget_alerts(store)
+
     return store.summary(month)
 
 
@@ -580,6 +677,12 @@ async def category_override(body: CategoryOverrideIn):
         cleaned = scrub_description(raw)
         if not has_residual_identifier(cleaned):
             store.record_correction(cleaned, body.category)
+
+    # Re-categorising a row can push a budgeted category over a threshold — guarded
+    # budget-alert check (never raises).
+    check_budget_alerts(store)
+    # An Income re-tag can complete/alter a recurring-deposit streak — guarded.
+    check_subscriptions(store)
 
     return store.summary()
 
@@ -713,6 +816,111 @@ async def put_settings(body: SettingsIn):
             if ntype in NOTIFICATION_TYPES:
                 store.set_bool_setting(f"notify:{ntype}", bool(enabled))
     return _settings_response()
+
+
+# ---------------------------------------------------------------------------
+# GET/PUT /budgets  (v6 — per-category monthly budgets + threshold alerts)
+# ---------------------------------------------------------------------------
+
+# Upper bound to keep junk out of a monthly dollar budget.
+_BUDGET_MAX = Decimal("10000000")
+
+
+def _budgets_response() -> dict:
+    """Serialise the budgetable category list + currently-set budgets.
+
+    ``categories`` is BUDGET_CATEGORIES in canonical order (the server is the source
+    of truth for the 7 budgetable names/order). ``budgets`` contains only set entries,
+    values as canonical str(Decimal 2dp). LOCAL-ONLY read of the owner's own store.
+    """
+    budgets = app.state.store.get_budgets()
+    return {
+        "categories": list(BUDGET_CATEGORIES),
+        "budgets": {cat: str(amount) for cat, amount in budgets.items()},
+    }
+
+
+@app.get("/budgets")
+async def get_budgets():
+    """Return the budgetable categories and any set monthly budgets.
+
+    Local serve to the owner's own client — same posture as /settings. No secrets,
+    no network. Amounts are str(Decimal), never float.
+    """
+    return _budgets_response()
+
+
+@app.put("/budgets")
+async def put_budgets(body: BudgetsIn):
+    """Apply a PARTIAL budgets update; return the full budgets in the GET shape.
+
+    For each (category, value): a category not in BUDGET_CATEGORIES is ignored
+    silently (mirrors put_settings). A null/empty value clears that budget. Any other
+    value must parse as a finite Decimal in (0, 10_000_000]; otherwise the whole
+    request is rejected with 400 and NOTHING is written (all entries are validated
+    before any write). A successful write triggers a guarded budget-alert check so
+    setting a budget below an already-spent total gives immediate feedback. Preferences
+    persist in local SQLite only — no off-machine call.
+    """
+    to_apply: list[tuple[str, Decimal | None]] = []
+    for key, value in body.budgets.items():
+        if key not in BUDGET_CATEGORIES:
+            continue  # unknown category ignored silently
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            to_apply.append((key, None))
+            continue
+        try:
+            amount = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            raise HTTPException(status_code=400, detail="invalid budget amount")
+        if (
+            amount.is_nan()
+            or amount.is_infinite()
+            or amount <= 0
+            or amount > _BUDGET_MAX
+        ):
+            raise HTTPException(status_code=400, detail="invalid budget amount")
+        to_apply.append((key, amount))
+
+    store = app.state.store
+    for cat, amount in to_apply:
+        store.set_budget(cat, amount)
+
+    check_budget_alerts(store)
+    return _budgets_response()
+
+
+# ---------------------------------------------------------------------------
+# GET /subscriptions  (v6 — recurring-merchant / income watch, read-only)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/subscriptions")
+async def get_subscriptions():
+    """Return the detected recurring payments (subscriptions) and regular deposits.
+
+    Read-only LOCAL serve of the owner's own store (same posture as /transfers): no
+    store mutation, no detection run, no network. Detection runs only at the guarded
+    trigger points (upload / retry / override / transfer untag). `merchant` is the
+    stored scrubbed root; `amount` is the expected magnitude as str(Decimal). Rows come
+    pre-ordered active-first then ended, each alphabetical. Empty DB -> {"count": 0,
+    "subscriptions": []}.
+    """
+    subs = app.state.store.get_subscriptions()
+    return {
+        "count": len(subs),
+        "subscriptions": [
+            {
+                "merchant": s["root"],
+                "direction": s["direction"],
+                "amount": s["expected_amount"],
+                "first_seen_month": s["first_seen_month"],
+                "last_seen_month": s["last_seen_month"],
+                "status": s["status"],
+            }
+            for s in subs
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------

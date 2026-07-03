@@ -2262,6 +2262,84 @@ a.nav-item {
   }
 }
 
+/* ── Search view (v6 — local full-text transaction search) ─────────── */
+.search-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--inputbg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9375rem;
+}
+
+.search-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Transfers view (v6 — internal cross-bank transfer netting) ────── */
+/* One card groups the two legs of a matched transfer plus its dismiss button. */
+.transfer-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.transfer-pair-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* The two legs reuse .cat-drawer-row; strip their per-row border inside the card. */
+.transfer-pair .cat-drawer-row {
+  border-bottom: none;
+  padding: 6px 0;
+}
+
+/* Ghost/secondary button, matching the settings-secondary-btn pattern. */
+.transfer-untag {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 7px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, border-color 0.3s ease;
+}
+
+.transfer-untag:hover:not(:disabled),
+.transfer-untag:focus-visible:not(:disabled) {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.transfer-untag:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Settings view (Feature E) ───────────────────────────── */
 /* Single column at every width — the page scrolls the whole stack. */
 .settings-grid {
@@ -2339,6 +2417,121 @@ a.nav-item {
   border-radius: 12px;
   padding: 14px;
   background: var(--surface2);
+}
+
+/* Monthly budgets (v6) — one row per budgetable category. */
+.settings-budget-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-budget-list .settings-budget-row:last-child {
+  border-bottom: none;
+}
+
+.settings-budget-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9375rem;
+  color: var(--text);
+}
+
+.settings-budget-input {
+  flex: none;
+  width: 7em;
+  text-align: right;
+  padding: 0.4rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--inputbg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9375rem;
+}
+
+.settings-budget-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-budget-clear {
+  flex: none;
+  padding: 6px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-budget-clear:hover:not(:disabled),
+.settings-budget-clear:focus-visible:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-budget-clear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Subscriptions (v6) — read-only one row per detected recurring payment. */
+.settings-subscription-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-subscriptions-list .settings-subscription-row:last-child {
+  border-bottom: none;
+}
+
+.settings-subscription-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9375rem;
+  color: var(--text);
+}
+
+.settings-subscription-amount {
+  flex: none;
+  font-size: 0.9375rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-subscription-seen {
+  flex: none;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.settings-subscription-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.settings-subscriptions-empty {
+  margin: 0;
+  padding: 4px 2px;
+  font-size: 0.9375rem;
+  color: var(--muted);
 }
 
 /* Data & backup. */

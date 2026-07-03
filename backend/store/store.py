@@ -20,7 +20,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -31,7 +31,15 @@ from backend.idempotency import NewTxnResult, transaction_fingerprint
 from .category_context import CategoryContext, DEFAULT_CONTEXT
 from .fuel_rule import is_fuel_convenience
 from .schema import init_schema as _schema_init
-from .taxonomy import TAXONOMY, coerce_category
+from .schema import search_index_available
+from .taxonomy import BUDGET_CATEGORIES, TAXONOMY, coerce_category
+from .transfer_rule import TRANSFER_CATEGORY, CandidateRow, pair_transfers
+
+# SQL fragment excluding internal-transfer rows from a spending aggregate. ANDed into
+# every WHERE clause that feeds a spend total (summary/_totals_for/category_trend). A
+# tagged transfer therefore never appears in totals, net, count, comparison, or series;
+# balances, the Excel transactions sheet, search, and CSV export deliberately keep it.
+_NOT_TRANSFER_SQL = "(category IS NULL OR category <> 'Transfer')"
 
 # Categories involved in the small-fuel-stop reclassification rule.
 _FUEL_RULE_FROM = "Transport"
@@ -168,6 +176,19 @@ class UncategorisedRow:
 
 
 @dataclass(frozen=True)
+class TransferDetectResult:
+    """Outcome of one detect_transfers() pass (LOCAL-ONLY; no network involved).
+
+    pairs_created is the number of new transfer pairs tagged THIS call (0 on the no-op
+    path). affected_months is the sorted, distinct set of 'YYYY-MM' keys of every row
+    tagged this call, so the pipeline can rebuild those months' workbooks; () when none.
+    """
+
+    pairs_created: int
+    affected_months: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class MonthRow:
     """A single transaction row formatted for the Excel builder (FR-30).
 
@@ -276,6 +297,10 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         _schema_init(self.conn)
+        # Whether the FTS5 full-text index is usable on this connection. When
+        # False (a SQLite build without FTS5), search_transactions() uses a LIKE
+        # fallback that returns the identical result shape.
+        self._fts: bool = search_index_available(self.conn)
         self._seed_category_context_if_empty()
 
     # ------------------------------------------------------------------
@@ -567,6 +592,186 @@ class Store:
         """
         return self.get_bool_setting(f"notify:{ntype}", True)
 
+    def delete_setting(self, key: str) -> None:
+        """DELETE one app_settings row; no-op when absent. Commits. LOCAL-ONLY."""
+        self.conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        self.conn.commit()
+
+    # ------------------------------------------------------------------
+    # Per-category monthly budgets + at-most-once alert claims (LOCAL-ONLY)
+    # ------------------------------------------------------------------
+    # Budgets are stored as namespaced app_settings keys ('budget:<Category>')
+    # rather than a dedicated config table (mirrors notify:<ntype> / fuel_rule_enabled).
+    # Fired-alert state lives in the budget_alert_fired table because its UNIQUE
+    # (category, year_month, threshold) constraint gives the atomic "claim exactly
+    # once" semantics a k-v pair cannot. LOCAL-ONLY: budgets, spend, and fired-state
+    # never leave this machine; nothing here touches the network.
+
+    def get_budgets(self) -> dict[str, Decimal]:
+        """All set budgets as {category: Decimal}. Reads app_settings 'budget:%' keys.
+
+        Skips (never raises on) an unparseable stored value or a category name that is
+        not budgetable (BUDGET_CATEGORIES). Empty dict when none set. LOCAL-ONLY.
+        """
+        rows = self.conn.execute(
+            "SELECT key, value FROM app_settings WHERE key LIKE 'budget:%'"
+        ).fetchall()
+        budgets: dict[str, Decimal] = {}
+        for row in rows:
+            category = row["key"][len("budget:"):]
+            if category not in BUDGET_CATEGORIES:
+                continue
+            try:
+                budgets[category] = amount_from_text(row["value"])
+            except (InvalidOperation, ValueError):
+                continue  # skip a hand-corrupted value rather than crash a read
+        return budgets
+
+    def set_budget(self, category: str, amount: Decimal | None) -> None:
+        """Upsert (amount > 0) or clear (amount None) one category budget.
+
+        Raises ValueError for a non-BUDGET_CATEGORIES category or amount <= 0 (callers
+        validate first; this is the last line of defence). Stores via amount_to_text.
+        Commits. LOCAL-ONLY.
+        """
+        if category not in BUDGET_CATEGORIES:
+            raise ValueError(f"not a budgetable category: {category!r}")
+        key = f"budget:{category}"
+        if amount is None:
+            self.delete_setting(key)
+            return
+        if amount <= 0:
+            raise ValueError("budget amount must be > 0")
+        self.set_setting(key, amount_to_text(amount))
+
+    def claim_budget_alert(
+        self, category: str, year_month: str, threshold: int
+    ) -> bool:
+        """Atomically claim one (category, month, threshold) alert slot.
+
+        INSERT OR IGNORE into budget_alert_fired; commits. Returns True iff this call
+        inserted the row (caller should send); False when the slot was already claimed
+        (idempotent — caller must NOT send). LOCAL-ONLY.
+        """
+        cursor = self.conn.execute(
+            "INSERT OR IGNORE INTO budget_alert_fired"
+            "(category, year_month, threshold, created_at) VALUES (?, ?, ?, ?)",
+            (category, year_month, threshold, _utc_now_iso()),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Recurring-merchant (subscription) detection state (LOCAL-ONLY, no LLM)
+    # ------------------------------------------------------------------
+    # Subscription state lives in its own `subscriptions` table (clean, scrubbed
+    # roots only — never account numbers/names) and at-most-once event slots in
+    # `subscription_event_fired`, whose UNIQUE (merchant_key, year_month, event)
+    # constraint gives the atomic "claim exactly once" semantics (mirrors
+    # budget_alert_fired). LOCAL-ONLY: detection reads/writes never leave this machine
+    # and nothing here touches the network.
+
+    def subscription_detection_rows(self) -> list[sqlite3.Row]:
+        """Return rows for recurring-merchant detection, Transfer legs excluded.
+
+        Columns: date, description, amount, category, year_month; ordered by
+        year_month then id. RAW, LOCAL-ONLY (descriptions are the owner's own data);
+        this method never sends anything off-machine.
+        """
+        return self.conn.execute(
+            f"SELECT date, description, amount, category, year_month "
+            f"FROM transactions WHERE {_NOT_TRANSFER_SQL} ORDER BY year_month, id"
+        ).fetchall()
+
+    def has_any_subscriptions(self) -> bool:
+        """True iff the subscriptions table has >= 1 row (drives the bootstrap gate)."""
+        row = self.conn.execute("SELECT 1 FROM subscriptions LIMIT 1").fetchone()
+        return row is not None
+
+    def get_subscriptions(self) -> list[dict]:
+        """Return all subscription state rows as dicts (expected_amount as stored str).
+
+        Ordered by status ASC ('active' < 'ended'), then root ASC. LOCAL-ONLY: the
+        stored root is already scrubbed; nothing here is ever sent off-machine.
+        """
+        rows = self.conn.execute(
+            "SELECT id, merchant_key, root, direction, expected_amount, "
+            "first_seen_month, last_seen_month, status, created_at, updated_at "
+            "FROM subscriptions ORDER BY status ASC, root ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def upsert_subscription(
+        self,
+        *,
+        merchant_key: str,
+        root: str,
+        direction: str,
+        expected_amount: Decimal,
+        first_seen_month: str,
+        last_seen_month: str,
+        status: str,
+    ) -> bool:
+        """Insert or update one subscription state row (keyed on merchant_key).
+
+        Guarded upsert (mirrors add_new): the ON CONFLICT branch only writes when one
+        of (expected_amount, first_seen_month, last_seen_month, status) actually
+        changed, so a no-op run writes NOTHING and leaves updated_at untouched
+        (idempotency). Returns True iff a row was inserted or updated. Commits.
+        LOCAL-ONLY; no network.
+        """
+        now = _utc_now_iso()
+        cursor = self.conn.execute(
+            """
+            INSERT INTO subscriptions
+                (merchant_key, root, direction, expected_amount, first_seen_month,
+                 last_seen_month, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(merchant_key) DO UPDATE SET
+                root = excluded.root,
+                direction = excluded.direction,
+                expected_amount = excluded.expected_amount,
+                first_seen_month = excluded.first_seen_month,
+                last_seen_month = excluded.last_seen_month,
+                status = excluded.status,
+                updated_at = excluded.updated_at
+            WHERE subscriptions.expected_amount IS NOT excluded.expected_amount
+               OR subscriptions.first_seen_month IS NOT excluded.first_seen_month
+               OR subscriptions.last_seen_month IS NOT excluded.last_seen_month
+               OR subscriptions.status IS NOT excluded.status
+            """,
+            (
+                merchant_key,
+                root,
+                direction,
+                amount_to_text(expected_amount),
+                first_seen_month,
+                last_seen_month,
+                status,
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def claim_subscription_event(
+        self, merchant_key: str, year_month: str, event: str
+    ) -> bool:
+        """Atomically claim one (merchant_key, month, event) slot.
+
+        INSERT OR IGNORE into subscription_event_fired; commits. Returns True iff this
+        call inserted the row (caller should send); False when the slot was already
+        claimed (idempotent — never re-fire). LOCAL-ONLY. (Clone of claim_budget_alert.)
+        """
+        cursor = self.conn.execute(
+            "INSERT OR IGNORE INTO subscription_event_fired"
+            "(merchant_key, year_month, event, created_at) VALUES (?, ?, ?, ?)",
+            (merchant_key, year_month, event, _utc_now_iso()),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     # ------------------------------------------------------------------
     # Layer 1: file fingerprints (FR-12)
     # ------------------------------------------------------------------
@@ -627,8 +832,6 @@ class Store:
         if not result.new_transactions:
             return 0
 
-        before = self.conn.total_changes
-
         rows = [
             (
                 result.fingerprints[i],
@@ -644,7 +847,12 @@ class Store:
             for i, txn in enumerate(result.new_transactions)
         ]
 
-        self.conn.executemany(
+        # cursor.rowcount (not conn.total_changes) is used to count the rows this
+        # statement actually inserted/updated: total_changes ALSO counts writes made
+        # by the transactions_fts sync triggers (schema.py), which would inflate the
+        # figure. rowcount reflects only the direct DML rows and stays correct whether
+        # or not the FTS index/triggers exist.
+        cursor = self.conn.executemany(
             """
             INSERT INTO transactions
                 (txn_fingerprint, date, description, amount, bank,
@@ -657,9 +865,10 @@ class Store:
             """,
             rows,
         )
+        rowcount = cursor.rowcount
         self.conn.commit()
 
-        return self.conn.total_changes - before
+        return rowcount
 
     def reconcile_balances(self, transactions: list[Transaction]) -> int:
         """Update balance-only for rows ALREADY in the store whose balance changed.
@@ -899,6 +1108,173 @@ class Store:
         return row is not None
 
     # ------------------------------------------------------------------
+    # Internal-transfer netting (deterministic, LOCAL-ONLY, no LLM/network)
+    # ------------------------------------------------------------------
+
+    def detect_transfers(self) -> TransferDetectResult:
+        """Match new cross-bank transfer pairs and tag both legs 'Transfer'.
+
+        Scans every transaction NOT already referenced by transfer_pairs (either
+        status, so a dismissed row is never re-matched) and not already tagged
+        'Transfer', hands the candidates to the deterministic pair_transfers() rule,
+        and for each accepted (debit, credit) pair records a transfer_pairs row and
+        sets both legs' category to 'Transfer' via a direct UPDATE (NOT set_categories,
+        whose coerce_category would fold the reserved label to 'Other'). The FTS index
+        stays in sync automatically through the transactions_fts_au trigger.
+
+        Each leg's PREVIOUS category (NULL allowed) is captured in prev_category_* so
+        untag can restore it. All writes happen in one transaction, committed once.
+
+        Idempotent: a re-run on unchanged data finds no unreferenced candidates that
+        pair, creates 0 pairs, and changes no categories. LOCAL-ONLY; zero network.
+        Tagged rows gain a non-NULL category, so they drop out of uncategorised() and
+        are never included in the sanitised off-machine LLM payload.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT id, date, amount, bank, category, year_month
+              FROM transactions
+             WHERE (category IS NULL OR category <> ?)
+               AND id NOT IN (
+                     SELECT txn_id_out FROM transfer_pairs
+                     UNION
+                     SELECT txn_id_in FROM transfer_pairs
+               )
+             ORDER BY id
+            """,
+            (TRANSFER_CATEGORY,),
+        ).fetchall()
+
+        by_id = {row["id"]: row for row in rows}
+        candidates = [
+            CandidateRow(
+                id=row["id"],
+                date=row["date"],
+                amount=amount_from_text(row["amount"]),
+                bank=row["bank"],
+            )
+            for row in rows
+        ]
+
+        pairs = pair_transfers(candidates)
+        if not pairs:
+            return TransferDetectResult(0, ())
+
+        now = _utc_now_iso()
+        affected: set[str] = set()
+        for debit_id, credit_id in pairs:
+            out_row = by_id[debit_id]
+            in_row = by_id[credit_id]
+            self.conn.execute(
+                """
+                INSERT INTO transfer_pairs
+                    (txn_id_out, txn_id_in, status, prev_category_out,
+                     prev_category_in, created_at)
+                VALUES (?, ?, 'active', ?, ?, ?)
+                """,
+                (debit_id, credit_id, out_row["category"], in_row["category"], now),
+            )
+            self.conn.execute(
+                "UPDATE transactions SET category = ? WHERE id IN (?, ?)",
+                (TRANSFER_CATEGORY, debit_id, credit_id),
+            )
+            affected.add(out_row["year_month"])
+            affected.add(in_row["year_month"])
+
+        self.conn.commit()
+        return TransferDetectResult(len(pairs), tuple(sorted(affected)))
+
+    def list_transfer_pairs(self) -> list[dict]:
+        """Return active transfer pairs, newest first, for the Transfers view.
+
+        LOCAL-ONLY: descriptions/amounts are the owner's own data, served only to the
+        owner's own client (same posture as transactions_for_category); nothing here
+        is ever sent off-machine. Money values are the stored canonical str(Decimal),
+        never float; `amount` is the positive magnitude of the credit leg.
+
+        Each dict::
+
+            {"id": pair_id, "amount": "500.00", "created_at": "...",
+             "out": {"id","date","description","amount","bank"},
+             "in":  {"id","date","description","amount","bank"}}
+        """
+        rows = self.conn.execute(
+            """
+            SELECT p.id AS pair_id, p.created_at,
+                   o.id AS out_id, o.date AS out_date, o.description AS out_desc,
+                   o.amount AS out_amount, o.bank AS out_bank,
+                   i.id AS in_id, i.date AS in_date, i.description AS in_desc,
+                   i.amount AS in_amount, i.bank AS in_bank
+              FROM transfer_pairs p
+              JOIN transactions o ON o.id = p.txn_id_out
+              JOIN transactions i ON i.id = p.txn_id_in
+             WHERE p.status = 'active'
+             ORDER BY o.date DESC, p.id DESC
+            """
+        ).fetchall()
+
+        return [
+            {
+                "id": row["pair_id"],
+                "amount": str(amount_from_text(row["in_amount"])),
+                "created_at": row["created_at"],
+                "out": {
+                    "id": row["out_id"],
+                    "date": row["out_date"],
+                    "description": row["out_desc"],
+                    "amount": row["out_amount"],
+                    "bank": row["out_bank"],
+                },
+                "in": {
+                    "id": row["in_id"],
+                    "date": row["in_date"],
+                    "description": row["in_desc"],
+                    "amount": row["in_amount"],
+                    "bank": row["in_bank"],
+                },
+            }
+            for row in rows
+        ]
+
+    def untag_transfer_pair(self, pair_id: int) -> int | None:
+        """Dismiss one transfer pair, restoring each leg's previous category.
+
+        Returns None when no pair has that id (endpoint 404). Returns 0 when the pair
+        is already dismissed (idempotent no-op). Otherwise restores both legs to their
+        captured prev_category_* (NULL allowed -> the row becomes a normal orphan the
+        retry button can re-categorise) via a direct UPDATE, marks the pair
+        'dismissed', commits once, and returns 2.
+
+        A dismissed pair's rows stay excluded from future detect_transfers() (the
+        exclusion covers both statuses), so an untagged pair is never silently
+        re-tagged. LOCAL-ONLY write; no network.
+        """
+        row = self.conn.execute(
+            "SELECT txn_id_out, txn_id_in, status, prev_category_out, prev_category_in "
+            "FROM transfer_pairs WHERE id = ?",
+            (pair_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["status"] == "dismissed":
+            return 0
+
+        self.conn.execute(
+            "UPDATE transactions SET category = ? WHERE id = ?",
+            (row["prev_category_out"], row["txn_id_out"]),
+        )
+        self.conn.execute(
+            "UPDATE transactions SET category = ? WHERE id = ?",
+            (row["prev_category_in"], row["txn_id_in"]),
+        )
+        self.conn.execute(
+            "UPDATE transfer_pairs SET status = 'dismissed' WHERE id = ?",
+            (pair_id,),
+        )
+        self.conn.commit()
+        return 2
+
+    # ------------------------------------------------------------------
     # Reporting (dashboard / Excel builder)
     # ------------------------------------------------------------------
 
@@ -958,6 +1334,7 @@ class Store:
 
         Amounts are summed in Python with Decimal (NOT SQL SUM) for exactness.
         NULL-category rows appear under the literal key 'Uncategorised' in totals.
+        Rows tagged 'Transfer' (internal account-to-account moves) are excluded.
         All money values in the returned dict are str(Decimal) — never float.
 
         Returns
@@ -993,7 +1370,8 @@ class Store:
             }
 
         rows = self.conn.execute(
-            "SELECT category, amount FROM transactions WHERE year_month = ?",
+            f"SELECT category, amount FROM transactions "
+            f"WHERE year_month = ? AND {_NOT_TRANSFER_SQL}",
             (year_month,),
         ).fetchall()
 
@@ -1129,6 +1507,123 @@ class Store:
             ],
         }
 
+    def search_transactions(
+        self, query: str, year_month: str | None = None, limit: int = 200
+    ) -> dict:
+        """Full-text search over description + category (LOCAL-ONLY; never off-machine).
+
+        Same local-serve posture and money contract as transactions_for_category:
+        str(Decimal) amounts, Decimal accumulation, no float. Uses the FTS5 index when
+        available (self._fts), else a LIKE fallback that returns the same shape.
+
+        query        : free text. Whitespace-split into tokens; implicit-AND prefix match.
+                       Blank/whitespace-only -> the empty shape (no DB hit).
+        year_month   : optional 'YYYY-MM' filter (exact match on the stored column).
+        limit        : max rows returned (default 200; hard cap).
+
+        Rows ordered by date DESC, id DESC (most recent first). Returns::
+
+            {
+                "query": "<original query>",
+                "month": "YYYY-MM" | None,   # the filter applied (None = all-time)
+                "total": "<str(Decimal)>",   # signed sum of the RETURNED rows
+                "count": N,                  # number of rows returned (<= limit)
+                "transactions": [
+                    {"id": int, "date": "YYYY-MM-DD", "description": str,
+                     "amount": "<str(Decimal)>", "bank": str, "category": str|None},
+                    ...
+                ],
+            }
+        """
+        empty = {
+            "query": query,
+            "month": year_month,
+            "total": "0.00",
+            "count": 0,
+            "transactions": [],
+        }
+
+        if not query or not query.strip():
+            return empty
+
+        tokens = query.strip().split()
+        if not tokens:
+            return empty
+
+        if self._fts:
+            # Quote every token as an FTS string literal (embedded " doubled) and
+            # append '*' for prefix matching. Quoting neutralises FTS operators and
+            # special characters (AND/OR/NEAR/(/*/:/^) so a token can never inject
+            # syntax or break the MATCH — implicit AND comes from space-joining.
+            match_expr = " ".join(
+                '"' + tok.replace('"', '""') + '"*' for tok in tokens
+            )
+            sql = (
+                "SELECT t.id, t.date, t.description, t.amount, t.bank, t.category "
+                "FROM transactions_fts f JOIN transactions t ON t.id = f.rowid "
+                "WHERE transactions_fts MATCH ?"
+            )
+            params: list[object] = [match_expr]
+            if year_month is not None:
+                sql += " AND t.year_month = ?"
+                params.append(year_month)
+            sql += " ORDER BY t.date DESC, t.id DESC LIMIT ?"
+            params.append(limit)
+
+            try:
+                rows = self.conn.execute(sql, params).fetchall()
+            except sqlite3.OperationalError:
+                # Belt-and-suspenders against any exotic token the quoting missed:
+                # fail safe (empty shape), never fail open (raise/leak).
+                return empty
+        else:
+            # LIKE fallback: per-token AND, each token matched against description
+            # OR category. Escape LIKE wildcards (\, %, _) so they are literal.
+            where = ["1=1"]
+            params = []
+            for tok in tokens:
+                escaped = (
+                    tok.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                )
+                pattern = f"%{escaped}%"
+                where.append(
+                    "(description LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')"
+                )
+                params.extend([pattern, pattern])
+            sql = (
+                "SELECT id, date, description, amount, bank, category "
+                "FROM transactions WHERE " + " AND ".join(where)
+            )
+            if year_month is not None:
+                sql += " AND year_month = ?"
+                params.append(year_month)
+            sql += " ORDER BY date DESC, id DESC LIMIT ?"
+            params.append(limit)
+
+            rows = self.conn.execute(sql, params).fetchall()
+
+        total = sum(
+            (amount_from_text(r["amount"]) for r in rows), Decimal("0.00")
+        )
+
+        return {
+            "query": query,
+            "month": year_month,
+            "total": str(total),
+            "count": len(rows),
+            "transactions": [
+                {
+                    "id": r["id"],
+                    "date": r["date"],
+                    "description": r["description"],
+                    "amount": r["amount"],  # already canonical str(Decimal)
+                    "bank": r["bank"],
+                    "category": r["category"],
+                }
+                for r in rows
+            ],
+        }
+
     # ------------------------------------------------------------------
     # Period views (v2 Pass 1: Monthly / Yearly + period-over-period
     # comparison; v2 Pass 2: category_trend). Read-only aggregation over
@@ -1156,10 +1651,13 @@ class Store:
         """Accumulate (totals-by-category, net, count) for one WHERE clause + param.
 
         Same Decimal accumulation loop as summary(); NULL category -> "Uncategorised".
+        Rows tagged 'Transfer' (internal account-to-account moves) are excluded, so the
+        totals/net/count and both period views' comparisons stay transfer-free.
         `where_sql` must reference exactly one '?' placeholder, bound to `param`.
         """
         rows = self.conn.execute(
-            f"SELECT category, amount FROM transactions WHERE {where_sql}",
+            f"SELECT category, amount FROM transactions "
+            f"WHERE {where_sql} AND {_NOT_TRANSFER_SQL}",
             (param,),
         ).fetchall()
 
@@ -1299,6 +1797,8 @@ class Store:
         Read-only aggregation over the existing transactions table (LOCAL-ONLY,
         never sent off-machine). Money contract copies summary() exactly: Decimal
         accumulation in Python, str(Decimal) out, NULL category -> "Uncategorised".
+        Rows tagged 'Transfer' (internal account-to-account moves) are excluded, so
+        'Transfer' can never appear in the returned series.
 
         Args:
             months:    window size; CLAMPED to [1, 24] (values outside are clamped,
@@ -1336,8 +1836,8 @@ class Store:
         window = _month_range(end_month, clamped)
 
         rows = self.conn.execute(
-            "SELECT year_month, category, amount FROM transactions "
-            "WHERE year_month BETWEEN ? AND ?",
+            f"SELECT year_month, category, amount FROM transactions "
+            f"WHERE year_month BETWEEN ? AND ? AND {_NOT_TRANSFER_SQL}",
             (window[0], window[-1]),
         ).fetchall()
 
@@ -1411,14 +1911,20 @@ class Store:
     def reset_all_data(self) -> dict:
         """Wipe all transaction data and re-seed category_context to defaults.
 
-        DELETEs every row from transactions, file_fingerprints, and corrections, then
-        rebuilds category_context to the 8 canonical DEFAULT_CONTEXT rows. All in one
-        transaction; commits once. Deliberately PRESERVES push_subscription (the
-        device stays subscribed) and app_settings (owner preferences are kept).
+        DELETEs every row from transfer_pairs, transactions, file_fingerprints, and
+        corrections, then rebuilds category_context to the 8 canonical DEFAULT_CONTEXT
+        rows. All in one transaction; commits once. Deliberately PRESERVES
+        push_subscription (the device stays subscribed) and app_settings (owner
+        preferences are kept).
 
         LOCAL-ONLY destructive maintenance op; contains ZERO network code. Returns the
         per-table deleted-row counts ``{"transactions": n, "file_fingerprints": n,
-        "corrections": n}`` captured BEFORE the delete.
+        "corrections": n, "transfer_pairs": n, "budget_alert_fired": n,
+        "subscriptions": n, "subscription_event_fired": n}`` captured BEFORE the
+        delete. budget_alert_fired, subscriptions, and subscription_event_fired are
+        wiped too (all derived from the transaction data being cleared); the budgets
+        themselves live in app_settings and are deliberately PRESERVED alongside the
+        other owner preferences.
         """
         counts = {
             "transactions": self.conn.execute(
@@ -1430,11 +1936,31 @@ class Store:
             "corrections": self.conn.execute(
                 "SELECT COUNT(*) FROM corrections"
             ).fetchone()[0],
+            "transfer_pairs": self.conn.execute(
+                "SELECT COUNT(*) FROM transfer_pairs"
+            ).fetchone()[0],
+            "budget_alert_fired": self.conn.execute(
+                "SELECT COUNT(*) FROM budget_alert_fired"
+            ).fetchone()[0],
+            "subscriptions": self.conn.execute(
+                "SELECT COUNT(*) FROM subscriptions"
+            ).fetchone()[0],
+            "subscription_event_fired": self.conn.execute(
+                "SELECT COUNT(*) FROM subscription_event_fired"
+            ).fetchone()[0],
         }
 
+        # transfer_pairs first: its FK references transactions(id), so it must be
+        # emptied before the transactions rows it points at.
+        self.conn.execute("DELETE FROM transfer_pairs")
         self.conn.execute("DELETE FROM transactions")
         self.conn.execute("DELETE FROM file_fingerprints")
         self.conn.execute("DELETE FROM corrections")
+        # Fired-alert state is derived from the (now wiped) transaction data.
+        self.conn.execute("DELETE FROM budget_alert_fired")
+        # Subscription state + fired-event slots are likewise derived from the data.
+        self.conn.execute("DELETE FROM subscription_event_fired")
+        self.conn.execute("DELETE FROM subscriptions")
 
         # Re-seed category_context to the canonical defaults (same rows as the
         # first-run seed / save_category_context replace-all).

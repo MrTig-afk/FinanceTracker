@@ -42,6 +42,12 @@
           <a href="#" class="nav-item nav-item--active" data-view="overview">
             <span class="nav-dot"></span>Overview
           </a>
+          <a href="#" class="nav-item" data-view="search">
+            <span class="nav-dot"></span>Search
+          </a>
+          <a href="#" class="nav-item" data-view="transfers">
+            <span class="nav-dot"></span>Transfers
+          </a>
           <a href="#" class="nav-item" data-view="trends">
             <span class="nav-dot"></span>Trends
           </a>
@@ -160,6 +166,27 @@
                 <canvas id="overview-trend-canvas" width="360" height="180"></canvas>
               </section>
             </div>
+          </section>
+
+          <!-- Search view (v6 — local full-text transaction search) -->
+          <section class="view" data-view="search" hidden>
+            <div class="search-toolbar">
+              <input id="search-input" type="search" class="search-input"
+                     placeholder="Search descriptions or categories"
+                     autocomplete="off" spellcheck="false" aria-label="Search transactions" />
+            </div>
+            <p id="search-message" class="message-banner"></p>
+            <section class="card">
+              <div id="search-results" class="cat-drawer-body"></div>
+            </section>
+          </section>
+
+          <!-- Transfers view (v6 — internal cross-bank transfer netting) -->
+          <section class="view" data-view="transfers" hidden>
+            <p id="transfers-message" class="message-banner"></p>
+            <section class="card">
+              <div id="transfers-list" class="cat-drawer-body"></div>
+            </section>
           </section>
 
           <!-- Upload view (FR-1 / FR-4) -->
@@ -497,6 +524,23 @@
                   Enabling notifications on this device is handled on the
                   <a href="#" class="settings-link" data-view="upload">Upload</a> tab.
                 </p>
+              </section>
+
+              <!-- Monthly budgets (v6) -->
+              <section class="card settings-card">
+                <h2 class="card-title">Monthly budgets</h2>
+                <p class="card-sub">Set a monthly limit per category. You get one heads-up at 80%
+                and one when a category goes over. Leave blank for no budget.</p>
+                <div id="settings-budgets" class="settings-budget-list"></div>
+                <p id="settings-budgets-status" class="settings-status" role="status" aria-live="polite"></p>
+              </section>
+
+              <!-- Subscriptions (v6) — read-only recurring-payment watch -->
+              <section class="card settings-card">
+                <h2 class="card-title">Subscriptions</h2>
+                <p class="settings-hint">Recurring payments detected from your statements. Read-only.</p>
+                <div id="settings-subscriptions" class="settings-subscriptions-list"></div>
+                <p id="settings-subscriptions-status" class="settings-status" role="status" aria-live="polite"></p>
               </section>
 
               <!-- Categoriser health -->

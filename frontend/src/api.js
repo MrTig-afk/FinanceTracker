@@ -1,7 +1,7 @@
 /**
  * api.js — network layer.
  * Talks to the owner's own backend only (/summary, /month, /year, /trends,
- * /status, /reclassify, /category-context, /push/subscribe, /push/unsubscribe).
+ * /search, /status, /reclassify, /category-context, /push/subscribe, /push/unsubscribe).
  * No secrets here. VITE_API_BASE is a non-secret URL (localhost / Tailscale).
  */
 
@@ -140,6 +140,81 @@ export async function fetchCategoryTransactions(category, month) {
   let res;
   try {
     res = await fetch(url, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Full-text search over the owner's own transactions (local-only, read-only).
+ * Reads the owner's own local backend only; descriptions never go off-machine.
+ * @param {string} q  Free-text query.
+ * @param {string|undefined} month  Optional 'YYYY-MM' filter. Omitted → all months.
+ * @returns {Promise<{query: string, month: string|null, total: string, count: number, transactions: Array<{id: number, date: string, description: string, amount: string, bank: string, category: string|null}>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function fetchSearch(q, month) {
+  const params = new URLSearchParams({ q });
+  if (month) params.set('month', month);
+  const url = `${API_BASE}/search?${params.toString()}`;
+
+  let res;
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' } });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * List internal cross-bank transfer pairs the backend has netted out of spending.
+ * Reads the owner's own local backend only; descriptions never go off-machine.
+ * @returns {Promise<{count: number, pairs: Array<{id: number, amount: string, created_at: string, out: object, in: object}>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function fetchTransfers() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/transfers`, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Undo one transfer match ("Not a transfer"), restoring each leg's category.
+ * Edits the owner's own local backend only.
+ * @param {number} pairId  Transfer pair id (from the Transfers view).
+ * @returns {Promise<{ok: boolean, pair_id: number, restored: number}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function postTransferUntag(pairId) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/transfers/${encodeURIComponent(pairId)}/untag`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
   } catch (e) {
     throw new ApiError('network error', { cause: e });
   }
@@ -346,6 +421,77 @@ export async function putSettings(partial) {
   let res;
   try {
     res = await fetch(`${API_BASE}/settings`, {
+      method: 'PUT',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify(partial ?? {}),
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch the owner's per-category monthly budgets (budgetable list + set amounts).
+ * @returns {Promise<{categories: string[], budgets: Object<string, string>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function getBudgets() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/budgets`, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Fetch the owner's detected recurring payments (subscriptions + regular deposits).
+ * @returns {Promise<{count: number, subscriptions: Array<object>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function getSubscriptions() {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/subscriptions`, {
+      headers: { Accept: 'application/json' },
+    });
+  } catch (e) {
+    throw new ApiError('network error', { cause: e });
+  }
+
+  if (!res.ok) {
+    throw new ApiError('request failed', { status: res.status });
+  }
+
+  return res.json();
+}
+
+/**
+ * Update the owner's monthly budgets. Sends a partial patch ({budgets: {cat: value}});
+ * a null (or empty-string) value clears that category's budget. Returns the full
+ * budgets in the GET shape.
+ * @param {{budgets: Object<string, string|number|null>}} partial
+ * @returns {Promise<{categories: string[], budgets: Object<string, string>}>}
+ * @throws {ApiError} On network failure or non-2xx response.
+ */
+export async function putBudgets(partial) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/budgets`, {
       method: 'PUT',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify(partial ?? {}),

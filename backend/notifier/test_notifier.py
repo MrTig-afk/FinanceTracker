@@ -648,3 +648,151 @@ class TestPerTypeGate:
             assert calls == []
         finally:
             store.close()
+
+    def test_budget_types_default_enabled_reach_delivery(self, monkeypatch):
+        from backend.store import Store
+
+        calls = self._stub_deliver(monkeypatch)
+        store = Store(":memory:")  # opt-out model: every type enabled by default
+        try:
+            for ntype in ("budget_approaching", "budget_exceeded"):
+                assert send_notification(
+                    store, ntype, count=85, detail="Groceries"
+                ) == 99
+            assert calls == [1, 1]
+        finally:
+            store.close()
+
+    def test_budget_type_disabled_is_hard_noop(self, monkeypatch):
+        from backend.store import Store
+
+        calls = self._stub_deliver(monkeypatch)
+        store = Store(":memory:")
+        store.set_bool_setting("notify:budget_exceeded", False)
+        try:
+            assert send_notification(
+                store, "budget_exceeded", count=120, detail="Transport"
+            ) == 0
+            assert calls == []
+            # A different budget type is unaffected (still enabled).
+            assert send_notification(
+                store, "budget_approaching", count=85, detail="Transport"
+            ) == 99
+            assert calls == [1]
+        finally:
+            store.close()
+
+
+# ---------------------------------------------------------------------------
+# TestBudgetNotificationCopy — the two v6 budget-alert types (Decision 8):
+# body carries a category name + integer percent ONLY. No "$", no other digits.
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetNotificationCopy:
+    def test_approaching_has_category_and_percent_only(self):
+        p = build_notification("budget_approaching", count=85, detail="Groceries")
+        assert p["type"] == "budget_approaching"
+        assert p["title"] and p["body"]
+        assert "Groceries" in p["body"]
+        assert "85" in p["body"]
+        assert "$" not in p["body"]
+        # The only digits in the body are the percent.
+        assert "".join(ch for ch in p["body"] if ch.isdigit()) == "85"
+
+    def test_exceeded_has_category_and_percent_only(self):
+        p = build_notification("budget_exceeded", count=120, detail="Dining Out")
+        assert p["type"] == "budget_exceeded"
+        assert "Dining Out" in p["body"]
+        assert "120" in p["body"]
+        assert "$" not in p["body"]
+        assert "".join(ch for ch in p["body"] if ch.isdigit()) == "120"
+
+    def test_both_types_in_catalog(self):
+        assert "budget_approaching" in NOTIFICATION_TYPES
+        assert "budget_exceeded" in NOTIFICATION_TYPES
+
+    def test_missing_detail_falls_back_without_leaking(self):
+        # No category supplied → a generic placeholder, never an amount/description.
+        p = build_notification("budget_approaching", count=80)
+        assert "$" not in p["body"]
+        assert "".join(ch for ch in p["body"] if ch.isdigit()) == "80"
+
+    def test_no_financial_tokens_in_either_body(self):
+        forbidden = ["$", "balance", "account", "payee", "payer", "description", "merchant"]
+        for ntype in ("budget_approaching", "budget_exceeded"):
+            body = build_notification(ntype, count=90, detail="Groceries")["body"].lower()
+            for token in forbidden:
+                assert token not in body
+
+
+# ---------------------------------------------------------------------------
+# TestSubscriptionNotificationCopy — the three v6 subscription-watch types.
+# Bodies carry ONLY a count, an integer percent, and the fixed words up/down —
+# never a merchant name or a dollar amount.
+# ---------------------------------------------------------------------------
+
+
+class TestSubscriptionNotificationCopy:
+    def test_all_three_types_in_catalog(self):
+        for ntype in ("subscription_new", "subscription_price_change", "income_missed"):
+            assert ntype in NOTIFICATION_TYPES
+
+    def test_subscription_new_is_count_only(self):
+        p = build_notification("subscription_new", count=2)
+        assert p["type"] == "subscription_new"
+        assert p["title"] and p["body"]
+        assert "2" in p["body"]
+        assert "$" not in p["body"]
+        # The only digits are the count.
+        assert "".join(ch for ch in p["body"] if ch.isdigit()) == "2"
+
+    def test_price_change_has_percent_and_direction_up(self):
+        p = build_notification("subscription_price_change", count=13, detail="up")
+        assert p["type"] == "subscription_price_change"
+        assert "13" in p["body"]
+        assert "up" in p["body"]
+        assert "$" not in p["body"]
+        assert "".join(ch for ch in p["body"] if ch.isdigit()) == "13"
+
+    def test_price_change_direction_down(self):
+        p = build_notification("subscription_price_change", count=8, detail="down")
+        assert "down" in p["body"]
+
+    def test_price_change_unknown_detail_falls_back(self):
+        # An unexpected/missing direction falls back to "up or down" — never leaks.
+        p = build_notification("subscription_price_change", count=5, detail="sideways")
+        assert "up or down" in p["body"]
+        p2 = build_notification("subscription_price_change", count=5)
+        assert "up or down" in p2["body"]
+
+    def test_income_missed_is_status_only(self):
+        p = build_notification("income_missed")
+        assert p["type"] == "income_missed"
+        assert p["title"] and p["body"]
+        assert not any(ch.isdigit() for ch in p["body"])
+        assert "$" not in p["body"]
+
+    def test_no_financial_tokens_in_any_subscription_body(self):
+        forbidden = ["$", "balance", "account", "payee", "payer", "description", "merchant"]
+        cases = [
+            ("subscription_new", {"count": 3}),
+            ("subscription_price_change", {"count": 20, "detail": "up"}),
+            ("income_missed", {}),
+        ]
+        for ntype, kwargs in cases:
+            body = build_notification(ntype, **kwargs)["body"].lower()
+            for token in forbidden:
+                assert token not in body
+
+    def test_no_emoji_or_em_dash_in_subscription_copy(self):
+        for ntype, kwargs in (
+            ("subscription_new", {"count": 1}),
+            ("subscription_price_change", {"count": 1, "detail": "up"}),
+            ("income_missed", {}),
+        ):
+            p = build_notification(ntype, **kwargs)
+            for text in (p["title"], p["body"]):
+                assert "—" not in text  # em dash
+                assert "–" not in text  # en dash
+                assert all(ord(ch) < 128 for ch in text)

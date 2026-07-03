@@ -1658,3 +1658,499 @@ class TestProbeOpenrouter:
         assert result["reachable"] is False
         assert result["rate_limited"] is False
         assert result["detail"] == "Could not reach OpenRouter"
+
+
+# ---------------------------------------------------------------------------
+# TestSearchEndpoint — GET /search (v6 local full-text transaction search)
+# ---------------------------------------------------------------------------
+
+class TestSearchEndpoint:
+    """GET /search: LOCAL, read-only FTS lookup over the owner's own store.
+
+    After _upload_both there are 5 rows in 2026-06 (fake analyser labels every
+    row 'Groceries'). Four of the five synthetic descriptions contain 'SYNTH'
+    (WOOLWORTHS METRO is the odd one out).
+    """
+
+    def test_populated_query_200_and_nonempty(self, api_client):
+        _upload_both(api_client)
+        r = api_client.get("/search", params={"q": "SYNTH"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["query"] == "SYNTH"
+        assert body["month"] is None
+        assert body["count"] == len(body["transactions"]) == 4
+
+    def test_shape_mirrors_category_transactions_plus_query_month(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get("/search", params={"q": "SYNTH"}).json()
+        assert set(body.keys()) == {"query", "month", "total", "count", "transactions"}
+        for t in body["transactions"]:
+            # category is the extra field vs /category-transactions.
+            assert set(t.keys()) == {"id", "date", "description", "amount", "bank", "category"}
+
+    def test_total_is_str_decimal_sum(self, api_client):
+        from decimal import Decimal
+
+        _upload_both(api_client)
+        body = api_client.get("/search", params={"q": "SYNTH"}).json()
+        expected = sum(
+            (Decimal(t["amount"]) for t in body["transactions"]), Decimal("0.00")
+        )
+        assert body["total"] == str(expected)
+
+    def test_category_label_is_searchable(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get("/search", params={"q": "Groceries"}).json()
+        # Every uploaded row was labelled Groceries by the fake analyser.
+        assert body["count"] == 5
+
+    def test_month_filter_applies(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get(
+            "/search", params={"q": "SYNTH", "month": "2026-06"}
+        ).json()
+        assert body["month"] == "2026-06"
+        assert body["count"] == 4
+
+    def test_month_filter_other_month_empty(self, api_client):
+        _upload_both(api_client)
+        body = api_client.get(
+            "/search", params={"q": "SYNTH", "month": "2026-01"}
+        ).json()
+        assert body["count"] == 0
+        assert body["total"] == "0.00"
+
+    def test_blank_query_200_empty_shape(self, api_client):
+        _upload_both(api_client)
+        r = api_client.get("/search", params={"q": ""})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["count"] == 0
+        assert body["transactions"] == []
+        assert body["total"] == "0.00"
+
+    def test_no_results_query_200(self, api_client):
+        _upload_both(api_client)
+        r = api_client.get("/search", params={"q": "NONEXISTENTTOKENZZZ"})
+        assert r.status_code == 200
+        assert r.json()["count"] == 0
+
+    def test_bad_month_returns_400(self, api_client):
+        r = api_client.get("/search", params={"q": "x", "month": "2026/06"})
+        assert r.status_code == 400
+
+    def test_bad_month_detail_is_fixed_string(self, api_client):
+        r = api_client.get("/search", params={"q": "x", "month": "2026/06"})
+        assert r.json()["detail"] == "month must be YYYY-MM"
+
+    def test_missing_q_is_422(self, api_client):
+        # q is a required query param; FastAPI returns 422 when it is absent.
+        r = api_client.get("/search")
+        assert r.status_code == 422
+
+    def test_special_char_query_not_500(self, api_client):
+        _upload_both(api_client)
+        for q in ['a"b(', "a AND b", "NEAR(", "%_", "*", "col:val"]:
+            r = api_client.get("/search", params={"q": q})
+            assert r.status_code == 200, f"q={q!r} produced {r.status_code}"
+
+    def test_account_number_never_in_results(self, api_client):
+        # Privacy: the synthetic Westpac account number must never surface in any
+        # returned description (the parser drops it; it is never stored/searchable).
+        _upload_both(api_client)
+        body = api_client.get("/search", params={"q": "SYNTH"}).json()
+        for t in body["transactions"]:
+            assert _FAKE_ACCT not in t["description"]
+        assert _FAKE_ACCT not in r_json_text(body)
+
+
+def r_json_text(body: dict) -> str:
+    """Serialise a response body to text for a substring privacy assertion."""
+    return json.dumps(body)
+
+
+# ---------------------------------------------------------------------------
+# TestTransfersEndpoints — GET /transfers, POST /transfers/{id}/untag (v6 f2).
+#
+# Seeds synthetic cross-bank legs directly on the live app store and calls
+# detect_transfers, then exercises the read + untag endpoints. All SYNTHETIC.
+# ---------------------------------------------------------------------------
+
+
+class TestTransfersEndpoints:
+    @staticmethod
+    def _seed_pair(*, out_category=None, in_category=None):
+        """Insert one CommBank debit + Westpac credit and run detection; return pair id.
+
+        Uses a SEPARATE Store on the same on-disk DB file: the app's own store
+        connection is bound to the TestClient's worker thread, so we cannot touch
+        it here. SQLite is a shared file, so the committed pair + tags are visible
+        to the endpoints immediately.
+        """
+        from backend.store import Store
+
+        with Store(os.environ["SQLITE_PATH"]) as store:
+            store.conn.executemany(
+                "INSERT INTO transactions"
+                "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+                " VALUES (?,?,?,?,?,?,?,'t')",
+                [
+                    ("tpo", "2026-06-01", "SYNTHXFEROUT", "-500.00", "commbank", out_category, "2026-06"),
+                    ("tpi", "2026-06-02", "SYNTHXFERIN", "500.00", "westpac", in_category, "2026-06"),
+                ],
+            )
+            store.conn.commit()
+            store.detect_transfers()
+            return store.list_transfer_pairs()[0]["id"]
+
+    def test_empty_shape(self, api_client):
+        r = api_client.get("/transfers")
+        assert r.status_code == 200
+        assert r.json() == {"count": 0, "pairs": []}
+
+    def test_populated_shape(self, api_client):
+        pair_id = self._seed_pair()
+        r = api_client.get("/transfers")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["count"] == 1
+        pair = body["pairs"][0]
+        assert pair["id"] == pair_id
+        assert pair["amount"] == "500.00"
+        assert pair["out"]["description"] == "SYNTHXFEROUT"
+        assert pair["out"]["amount"] == "-500.00"
+        assert pair["out"]["bank"] == "commbank"
+        assert pair["in"]["description"] == "SYNTHXFERIN"
+        assert pair["in"]["amount"] == "500.00"
+        assert pair["in"]["bank"] == "westpac"
+
+    def test_summary_excludes_transfers_end_to_end(self, api_client):
+        self._seed_pair(out_category="Groceries", in_category=None)
+        # Both legs tagged Transfer -> excluded from /summary totals + count.
+        body = api_client.get("/summary?month=2026-06").json()
+        assert "Transfer" not in body["totals"]
+        assert body["count"] == 0
+
+    def test_untag_restores_category_and_counts_again(self, api_client):
+        pair_id = self._seed_pair(out_category="Groceries", in_category=None)
+
+        r = api_client.post(f"/transfers/{pair_id}/untag")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "pair_id": pair_id, "restored": 2}
+
+        # The restored spending row is counted by /summary again.
+        body = api_client.get("/summary?month=2026-06").json()
+        assert body["totals"].get("Groceries") == "-500.00"
+        assert body["count"] == 2  # Groceries leg + restored-NULL (Uncategorised) leg
+        # The pair is gone from the active list.
+        assert api_client.get("/transfers").json()["count"] == 0
+
+    def test_untag_unknown_id_404(self, api_client):
+        r = api_client.post("/transfers/999999/untag")
+        assert r.status_code == 404
+        assert r.json()["detail"] == "transfer pair not found"
+
+    def test_untag_second_call_restored_zero(self, api_client):
+        pair_id = self._seed_pair(out_category="Groceries")
+        assert api_client.post(f"/transfers/{pair_id}/untag").json()["restored"] == 2
+        second = api_client.post(f"/transfers/{pair_id}/untag")
+        assert second.status_code == 200
+        assert second.json() == {"ok": True, "pair_id": pair_id, "restored": 0}
+
+    def test_non_int_pair_id_422(self, api_client):
+        r = api_client.post("/transfers/not-an-int/untag")
+        assert r.status_code == 422
+
+    def test_reset_clears_transfer_pairs_and_reports_count(self, api_client):
+        self._seed_pair(out_category="Groceries")
+        r = api_client.post("/reset", json={"confirm": "RESET"})
+        assert r.status_code == 200
+        assert r.json()["cleared"]["transfer_pairs"] == 1
+        # No transfers remain after reset.
+        assert api_client.get("/transfers").json()["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestBudgetsEndpoints — GET/PUT /budgets  (v6 feature 3)
+#
+# All SYNTHETIC. The seven budgetable categories come from BUDGET_CATEGORIES
+# (TAXONOMY minus Income). Validation rejects the whole request atomically.
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetsEndpoints:
+    _EXPECTED_CATEGORIES = [
+        "Groceries", "Housing", "Dining Out", "Transport",
+        "Entertainment", "Subscriptions", "Other",
+    ]
+
+    def test_get_empty_shape(self, api_client):
+        body = api_client.get("/budgets").json()
+        assert body["categories"] == self._EXPECTED_CATEGORIES
+        assert body["budgets"] == {}
+
+    def test_put_sets_and_get_reflects_canonical_2dp(self, api_client):
+        r = api_client.put("/budgets", json={"budgets": {"Groceries": "250"}})
+        assert r.status_code == 200
+        assert r.json()["budgets"]["Groceries"] == "250.00"
+        # GET reflects the same canonical value.
+        assert api_client.get("/budgets").json()["budgets"]["Groceries"] == "250.00"
+
+    def test_put_accepts_numeric_value(self, api_client):
+        r = api_client.put("/budgets", json={"budgets": {"Transport": 120.5}})
+        assert r.status_code == 200
+        assert r.json()["budgets"]["Transport"] == "120.50"
+
+    def test_put_null_clears(self, api_client):
+        api_client.put("/budgets", json={"budgets": {"Groceries": "250"}})
+        r = api_client.put("/budgets", json={"budgets": {"Groceries": None}})
+        assert r.status_code == 200
+        assert "Groceries" not in r.json()["budgets"]
+
+    def test_put_empty_string_clears(self, api_client):
+        api_client.put("/budgets", json={"budgets": {"Groceries": "250"}})
+        r = api_client.put("/budgets", json={"budgets": {"Groceries": ""}})
+        assert r.status_code == 200
+        assert "Groceries" not in r.json()["budgets"]
+
+    def test_put_unknown_category_silently_ignored(self, api_client):
+        r = api_client.put("/budgets", json={"budgets": {"Crypto": "100"}})
+        assert r.status_code == 200
+        assert "Crypto" not in r.json()["budgets"]
+        assert api_client.get("/budgets").json()["budgets"] == {}
+
+    def test_put_income_silently_ignored(self, api_client):
+        # Income is not budgetable → ignored like any unknown key (no 400).
+        r = api_client.put("/budgets", json={"budgets": {"Income": "100"}})
+        assert r.status_code == 200
+        assert "Income" not in r.json()["budgets"]
+
+    def test_max_bound_inclusive(self, api_client):
+        r = api_client.put("/budgets", json={"budgets": {"Housing": "10000000"}})
+        assert r.status_code == 200
+        assert r.json()["budgets"]["Housing"] == "10000000.00"
+
+    @pytest.mark.parametrize("bad", ["abc", "-5", "0", "20000000", "NaN", "Infinity"])
+    def test_put_invalid_value_400_writes_nothing(self, api_client, bad):
+        r = api_client.put("/budgets", json={"budgets": {"Groceries": bad}})
+        assert r.status_code == 400
+        assert r.json()["detail"] == "invalid budget amount"
+        # Nothing was written from the rejected request.
+        assert api_client.get("/budgets").json()["budgets"] == {}
+
+    def test_put_all_or_nothing_on_one_bad_entry(self, api_client):
+        # One valid + one invalid entry → whole request rejected, valid one NOT written.
+        r = api_client.put(
+            "/budgets", json={"budgets": {"Groceries": "250", "Transport": "-5"}}
+        )
+        assert r.status_code == 400
+        assert api_client.get("/budgets").json()["budgets"] == {}
+
+    def test_settings_expose_both_budget_toggles(self, api_client):
+        body = api_client.get("/settings").json()
+        assert "budget_approaching" in body["notifications"]
+        assert "budget_exceeded" in body["notifications"]
+        # Opt-out model: default enabled.
+        assert body["notifications"]["budget_approaching"] is True
+        assert body["notifications"]["budget_exceeded"] is True
+
+    def test_reset_preserves_budgets(self, api_client):
+        api_client.put("/budgets", json={"budgets": {"Groceries": "250"}})
+        api_client.post("/reset", json={"confirm": "RESET"})
+        # Budgets live in app_settings and survive a data reset.
+        assert api_client.get("/budgets").json()["budgets"]["Groceries"] == "250.00"
+
+
+# ---------------------------------------------------------------------------
+# TestBudgetAlertTriggers — the guarded check fires at each mutation endpoint.
+#
+# backend.app.check_budget_alerts is replaced with a counting spy so the test
+# asserts the trigger wiring without depending on push delivery (a hard no-op
+# by default anyway).
+# ---------------------------------------------------------------------------
+
+
+class TestBudgetAlertTriggers:
+    @staticmethod
+    def _spy(monkeypatch):
+        calls = []
+
+        def _fake(store, *args, **kwargs):  # noqa: ARG001
+            calls.append(1)
+            return 0
+
+        monkeypatch.setattr(app_module, "check_budget_alerts", _fake)
+        return calls
+
+    @staticmethod
+    def _seed_transport(tmp_path):
+        conn = sqlite3.connect(str(tmp_path / "test.sqlite"))
+        conn.execute(
+            "INSERT INTO transactions"
+            "(txn_fingerprint,date,description,amount,bank,category,year_month,created_at)"
+            " VALUES"
+            " ('bf1','2026-06-15','BP CONNECT','-7.00','commbank','Transport','2026-06','t'),"
+            " ('bf2','2026-06-16','OPAL TRAVEL','-3.00','commbank','Transport','2026-06','t')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_put_budgets_triggers_check(self, api_client, monkeypatch):
+        calls = self._spy(monkeypatch)
+        r = api_client.put("/budgets", json={"budgets": {"Groceries": "250"}})
+        assert r.status_code == 200
+        assert len(calls) == 1
+
+    def test_category_override_triggers_check(self, api_client, monkeypatch):
+        _upload_both(api_client)
+        calls = self._spy(monkeypatch)
+        with sqlite3.connect(os.environ["SQLITE_PATH"]) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT id FROM transactions ORDER BY id").fetchone()
+        r = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Transport"}
+        )
+        assert r.status_code == 200
+        assert len(calls) == 1
+
+    def test_reclassify_triggers_check(self, api_client, tmp_path, monkeypatch):
+        self._seed_transport(tmp_path)
+        calls = self._spy(monkeypatch)
+        r = api_client.post(
+            "/reclassify", params={"enabled": "true", "month": "2026-06"}
+        )
+        assert r.status_code == 200
+        assert len(calls) == 1
+
+    def test_untag_transfer_triggers_check(self, api_client, monkeypatch):
+        pair_id = TestTransfersEndpoints._seed_pair(out_category="Groceries")
+        calls = self._spy(monkeypatch)
+        r = api_client.post(f"/transfers/{pair_id}/untag")
+        assert r.status_code == 200
+        assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# TestSubscriptionsEndpoint — GET /subscriptions (v6 feature 4), read-only.
+#
+# Seeds synthetic subscription state directly on the live app store (a separate
+# Store on the same on-disk DB file, mirroring TestTransfersEndpoints). All
+# SYNTHETIC — no real merchants, no real amounts.
+# ---------------------------------------------------------------------------
+
+
+class TestSubscriptionsEndpoint:
+    @staticmethod
+    def _seed_subscription(**overrides):
+        from decimal import Decimal
+
+        from backend.store import Store
+
+        kwargs = {
+            "merchant_key": "spend:STREAMCO",
+            "root": "STREAMCO",
+            "direction": "spend",
+            "expected_amount": Decimal("22.99"),
+            "first_seen_month": "2026-04",
+            "last_seen_month": "2026-06",
+            "status": "active",
+        }
+        kwargs.update(overrides)
+        with Store(os.environ["SQLITE_PATH"]) as store:
+            store.upsert_subscription(**kwargs)
+
+    def test_empty_shape(self, api_client):
+        r = api_client.get("/subscriptions")
+        assert r.status_code == 200
+        assert r.json() == {"count": 0, "subscriptions": []}
+
+    def test_populated_shape(self, api_client):
+        from decimal import Decimal
+
+        self._seed_subscription()
+        r = api_client.get("/subscriptions")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["count"] == 1
+        sub = body["subscriptions"][0]
+        assert sub == {
+            "merchant": "STREAMCO",
+            "direction": "spend",
+            "amount": "22.99",
+            "first_seen_month": "2026-04",
+            "last_seen_month": "2026-06",
+            "status": "active",
+        }
+        del Decimal  # silence unused import in some linters
+
+    def test_active_before_ended_ordering(self, api_client):
+        from decimal import Decimal
+
+        self._seed_subscription(merchant_key="spend:ZEBRA", root="ZEBRA", status="active")
+        self._seed_subscription(
+            merchant_key="income:ACME SALARY", root="ACME SALARY", direction="income",
+            expected_amount=Decimal("5000.00"), status="ended",
+        )
+        body = api_client.get("/subscriptions").json()
+        assert body["count"] == 2
+        # Active first, then ended.
+        assert body["subscriptions"][0]["status"] == "active"
+        assert body["subscriptions"][1]["status"] == "ended"
+        assert body["subscriptions"][1]["direction"] == "income"
+
+    def test_reset_clears_both_subscription_tables(self, api_client):
+        self._seed_subscription()
+        with sqlite3.connect(os.environ["SQLITE_PATH"]) as conn:
+            conn.execute(
+                "INSERT INTO subscription_event_fired"
+                "(merchant_key,year_month,event,created_at)"
+                " VALUES ('spend:STREAMCO','2026-06','new','t')"
+            )
+            conn.commit()
+
+        r = api_client.post("/reset", json={"confirm": "RESET"})
+        assert r.status_code == 200
+        cleared = r.json()["cleared"]
+        assert cleared["subscriptions"] == 1
+        assert cleared["subscription_event_fired"] == 1
+        # No subscriptions remain after reset.
+        assert api_client.get("/subscriptions").json()["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestSubscriptionTriggers — check_subscriptions is wired at the mutation
+# endpoints that can alter detection (category-override, transfer untag).
+# ---------------------------------------------------------------------------
+
+
+class TestSubscriptionTriggers:
+    @staticmethod
+    def _spy(monkeypatch):
+        calls = []
+
+        def _fake(store, *args, **kwargs):  # noqa: ARG001
+            calls.append(1)
+            return 0
+
+        monkeypatch.setattr(app_module, "check_subscriptions", _fake)
+        return calls
+
+    def test_category_override_triggers_check(self, api_client, monkeypatch):
+        _upload_both(api_client)
+        calls = self._spy(monkeypatch)
+        with sqlite3.connect(os.environ["SQLITE_PATH"]) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT id FROM transactions ORDER BY id").fetchone()
+        r = api_client.post(
+            "/category-override", json={"id": row["id"], "category": "Income"}
+        )
+        assert r.status_code == 200
+        assert len(calls) == 1
+
+    def test_untag_transfer_triggers_check(self, api_client, monkeypatch):
+        pair_id = TestTransfersEndpoints._seed_pair(out_category="Groceries")
+        calls = self._spy(monkeypatch)
+        r = api_client.post(f"/transfers/{pair_id}/untag")
+        assert r.status_code == 200
+        assert len(calls) == 1

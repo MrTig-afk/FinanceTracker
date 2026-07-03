@@ -12,6 +12,9 @@
 import {
   getSettings,
   putSettings,
+  getBudgets,
+  putBudgets,
+  getSubscriptions,
   getCorrections,
   deleteCorrection,
   getCategoriserStatus,
@@ -35,6 +38,11 @@ const NOTIFICATION_TYPES = [
   ['duplicate_noop', 'Duplicate upload skipped'],
   ['generic_error', 'Something went wrong'],
   ['monthly_reminder', 'Monthly upload reminder'],
+  ['budget_approaching', 'Budget approaching (80%)'],
+  ['budget_exceeded', 'Budget exceeded'],
+  ['subscription_new', 'New subscription detected'],
+  ['subscription_price_change', 'Subscription price change'],
+  ['income_missed', 'Expected deposit missed'],
 ];
 
 const RESET_CONFIRM = 'RESET';
@@ -69,6 +77,9 @@ export function createSettings({ root = document, api } = {}) {
   const _api = {
     getSettings,
     putSettings,
+    getBudgets,
+    putBudgets,
+    getSubscriptions,
     getCorrections,
     deleteCorrection,
     getCategoriserStatus,
@@ -83,6 +94,12 @@ export function createSettings({ root = document, api } = {}) {
 
   const notifWrap = root.getElementById('settings-notifications');
   const notifStatus = root.getElementById('settings-notifications-status');
+
+  const budgetWrap = root.getElementById('settings-budgets');
+  const budgetStatus = root.getElementById('settings-budgets-status');
+
+  const subsWrap = root.getElementById('settings-subscriptions');
+  const subsStatus = root.getElementById('settings-subscriptions-status');
 
   const backupLink = root.getElementById('settings-backup-link');
   const resetInput = root.getElementById('settings-reset-input');
@@ -163,6 +180,129 @@ export function createSettings({ root = document, api } = {}) {
       row.appendChild(text);
       row.appendChild(sw);
       notifWrap.appendChild(row);
+    }
+  }
+
+  // --- Monthly budgets ------------------------------------------------------
+
+  function _renderBudgets(data) {
+    if (!budgetWrap) return;
+    budgetWrap.textContent = '';
+    const categories = data && Array.isArray(data.categories) ? data.categories : [];
+    const budgets = (data && data.budgets) ?? {};
+
+    for (const name of categories) {
+      const current = budgets[name] ?? '';
+
+      const row = doc.createElement('div');
+      row.className = 'settings-budget-row';
+
+      const label = doc.createElement('span');
+      label.className = 'settings-budget-label';
+      label.textContent = name;
+
+      const input = doc.createElement('input');
+      input.type = 'number';
+      input.className = 'settings-budget-input';
+      input.min = '0';
+      input.step = '0.01';
+      input.inputMode = 'decimal';
+      input.placeholder = 'No budget';
+      input.setAttribute('aria-label', `Monthly budget for ${name}`);
+      input.value = current;
+
+      const clear = doc.createElement('button');
+      clear.type = 'button';
+      clear.className = 'settings-budget-clear';
+      clear.textContent = 'Clear';
+      clear.setAttribute('aria-label', `Clear budget for ${name}`);
+      clear.disabled = current === '';
+
+      // Remember the last-saved value so a failed save can revert the input.
+      const previous = current;
+
+      input.addEventListener('change', async () => {
+        _setStatus(budgetStatus, '');
+        const raw = input.value.trim();
+        const payload =
+          raw === ''
+            ? { budgets: { [name]: null } }
+            : { budgets: { [name]: input.value } };
+        try {
+          const updated = await _api.putBudgets(payload);
+          _setStatus(budgetStatus, 'Saved.');
+          _renderBudgets(updated); // server-canonical formatting + clear-button state
+        } catch {
+          input.value = previous; // revert the optimistic edit
+          _setStatus(budgetStatus, 'Could not save that budget.', true);
+        }
+      });
+
+      clear.addEventListener('click', async () => {
+        clear.disabled = true;
+        _setStatus(budgetStatus, '');
+        try {
+          const updated = await _api.putBudgets({ budgets: { [name]: null } });
+          _renderBudgets(updated);
+        } catch {
+          clear.disabled = false;
+          _setStatus(budgetStatus, 'Could not save that budget.', true);
+        }
+      });
+
+      row.appendChild(label);
+      row.appendChild(input);
+      row.appendChild(clear);
+      budgetWrap.appendChild(row);
+    }
+  }
+
+  // --- Subscriptions (read-only) --------------------------------------------
+
+  function _renderSubscriptions(data) {
+    if (!subsWrap) return;
+    subsWrap.textContent = '';
+    const items = (data && Array.isArray(data.subscriptions)) ? data.subscriptions : [];
+
+    if (items.length === 0) {
+      const empty = doc.createElement('p');
+      empty.className = 'settings-subscriptions-empty';
+      empty.textContent = 'No recurring payments detected yet.';
+      subsWrap.appendChild(empty);
+      return;
+    }
+
+    for (const item of items) {
+      const row = doc.createElement('div');
+      row.className = 'settings-subscription-row';
+
+      const name = doc.createElement('span');
+      name.className = 'settings-subscription-name';
+      name.textContent = item.merchant;
+
+      const amount = doc.createElement('span');
+      amount.className = 'settings-subscription-amount';
+      amount.textContent =
+        item.direction === 'income'
+          ? `$${item.amount} incoming/month`
+          : `$${item.amount}/month`;
+
+      const seen = doc.createElement('span');
+      seen.className = 'settings-subscription-seen';
+      seen.textContent = `Last seen ${item.last_seen_month}`;
+
+      row.appendChild(name);
+      row.appendChild(amount);
+      row.appendChild(seen);
+
+      if (item.status === 'ended') {
+        const tag = doc.createElement('span');
+        tag.className = 'settings-subscription-tag';
+        tag.textContent = 'Ended';
+        row.appendChild(tag);
+      }
+
+      subsWrap.appendChild(row);
     }
   }
 
@@ -347,6 +487,8 @@ export function createSettings({ root = document, api } = {}) {
 
   async function load() {
     _setStatus(notifStatus, '');
+    _setStatus(budgetStatus, '');
+    _setStatus(subsStatus, '');
     _setStatus(corrStatus, '');
     _setStatus(resetStatus, '');
     _setStatus(catTestStatus, '');
@@ -360,6 +502,22 @@ export function createSettings({ root = document, api } = {}) {
     } catch {
       _renderNotifications({});
       _setStatus(notifStatus, 'Could not load notification settings.', true);
+    }
+
+    // Monthly budgets (server owns the budgetable category list + order).
+    try {
+      _renderBudgets(await _api.getBudgets());
+    } catch {
+      _renderBudgets({ categories: [], budgets: {} });
+      _setStatus(budgetStatus, 'Could not load budgets.', true);
+    }
+
+    // Subscriptions (read-only; server owns detection + ordering).
+    try {
+      _renderSubscriptions(await _api.getSubscriptions());
+    } catch {
+      _renderSubscriptions({ subscriptions: [] });
+      _setStatus(subsStatus, 'Could not load subscriptions.', true);
     }
 
     // Categoriser health.

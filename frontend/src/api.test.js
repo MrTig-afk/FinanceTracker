@@ -15,11 +15,17 @@ import {
   fetchCategoryContext,
   saveCategoryContext,
   fetchCategoryTransactions,
+  fetchSearch,
+  fetchTransfers,
+  postTransferUntag,
   postCategoryOverride,
   postPushSubscribe,
   postPushUnsubscribe,
   getSettings,
   putSettings,
+  getBudgets,
+  putBudgets,
+  getSubscriptions,
   getCorrections,
   deleteCorrection,
   getCategoriserStatus,
@@ -190,6 +196,172 @@ describe('fetchCategoryTransactions', () => {
   it('rejects with ApiError (not raw TypeError) on network failure', async () => {
     vi.stubGlobal('fetch', makeNetworkFailFetch());
     const err = await fetchCategoryTransactions('Subscriptions').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchSearch — v6 local full-text transaction search
+// ---------------------------------------------------------------------------
+
+const CANNED_SEARCH = {
+  query: 'coffee',
+  month: '2026-06',
+  total: '-16.75',
+  count: 1,
+  transactions: [
+    { id: 3, date: '2026-06-12', description: 'SYNTH COFFEE', amount: '-16.75', bank: 'commbank', category: 'Dining Out' },
+  ],
+};
+
+describe('fetchSearch', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_SEARCH));
+    const result = await fetchSearch('coffee', '2026-06');
+    expect(result).toEqual(CANNED_SEARCH);
+  });
+
+  it('encodes q and month as query params on /search', async () => {
+    const mockFetch = makeOkFetch(CANNED_SEARCH);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchSearch('coffee', '2026-06');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/search?');
+    expect(calledUrl).toContain('q=coffee');
+    expect(calledUrl).toContain('month=2026-06');
+  });
+
+  it('omits the month param when not supplied', async () => {
+    const mockFetch = makeOkFetch(CANNED_SEARCH);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchSearch('coffee');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('q=coffee');
+    expect(calledUrl).not.toContain('month=');
+  });
+
+  it('URL-encodes special characters in the query', async () => {
+    const mockFetch = makeOkFetch(CANNED_SEARCH);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchSearch('a b&c');
+    const calledUrl = mockFetch.mock.calls[0][0];
+    // URLSearchParams encodes the space and ampersand — never breaks the URL.
+    expect(calledUrl).toContain('q=a+b%26c');
+  });
+
+  it('sends an Accept: application/json header', async () => {
+    const mockFetch = makeOkFetch(CANNED_SEARCH);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchSearch('coffee');
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+  });
+
+  it('rejects with ApiError carrying the status on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await fetchSearch('x', '2026/06').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchSearch('coffee').catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.name).toBe('ApiError');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchTransfers / postTransferUntag — v6 internal transfer netting
+// ---------------------------------------------------------------------------
+
+const CANNED_TRANSFERS = {
+  count: 1,
+  pairs: [
+    {
+      id: 7,
+      amount: '500.00',
+      created_at: '2026-06-02T00:00:00Z',
+      out: { id: 1, date: '2026-06-01', description: 'SYNTH XFER OUT', amount: '-500.00', bank: 'commbank' },
+      in: { id: 2, date: '2026-06-02', description: 'SYNTH XFER IN', amount: '500.00', bank: 'westpac' },
+    },
+  ],
+};
+
+describe('fetchTransfers', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch(CANNED_TRANSFERS));
+    const result = await fetchTransfers();
+    expect(result).toEqual(CANNED_TRANSFERS);
+  });
+
+  it('GETs the /transfers URL', async () => {
+    const mockFetch = makeOkFetch(CANNED_TRANSFERS);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchTransfers();
+    const calledUrl = mockFetch.mock.calls[0][0];
+    expect(calledUrl).toContain('/transfers');
+  });
+
+  it('sends an Accept: application/json header and no body', async () => {
+    const mockFetch = makeOkFetch(CANNED_TRANSFERS);
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchTransfers();
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+    expect(options.body).toBeUndefined();
+  });
+
+  it('rejects with ApiError carrying the status on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    const err = await fetchTransfers().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(500);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await fetchTransfers().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.name).toBe('ApiError');
+  });
+});
+
+describe('postTransferUntag', () => {
+  it('resolves to parsed JSON on a 200 response', async () => {
+    vi.stubGlobal('fetch', makeOkFetch({ ok: true, pair_id: 7, restored: 2 }));
+    const result = await postTransferUntag(7);
+    expect(result).toEqual({ ok: true, pair_id: 7, restored: 2 });
+  });
+
+  it('POSTs to /transfers/{id}/untag', async () => {
+    const mockFetch = makeOkFetch({ ok: true, pair_id: 7, restored: 2 });
+    vi.stubGlobal('fetch', mockFetch);
+    await postTransferUntag(7);
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/transfers/7/untag');
+    expect(options.method).toBe('POST');
+  });
+
+  it('URL-encodes the pair id', async () => {
+    const mockFetch = makeOkFetch({ ok: true, pair_id: 0, restored: 0 });
+    vi.stubGlobal('fetch', mockFetch);
+    await postTransferUntag('a/b');
+    const url = mockFetch.mock.calls[0][0];
+    expect(url).toContain('/transfers/a%2Fb/untag');
+  });
+
+  it('rejects with ApiError carrying the status on a 404 (unknown pair)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(404));
+    const err = await postTransferUntag(999).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await postTransferUntag(7).catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
   });
 });
@@ -617,6 +789,147 @@ describe('putSettings', () => {
     vi.stubGlobal('fetch', makeNetworkFailFetch());
     const err = await putSettings({}).catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getBudgets / putBudgets — v6 per-category monthly budgets
+// ---------------------------------------------------------------------------
+
+const CANNED_BUDGETS = {
+  categories: ['Groceries', 'Housing', 'Dining Out', 'Transport', 'Entertainment', 'Subscriptions', 'Other'],
+  budgets: { Groceries: '250.00' },
+};
+
+describe('getBudgets', () => {
+  it('GETs /budgets and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch(CANNED_BUDGETS);
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await getBudgets();
+    expect(result).toEqual(CANNED_BUDGETS);
+    expect(mockFetch.mock.calls[0][0]).toContain('/budgets');
+  });
+
+  it('sends an Accept: application/json header and no body', async () => {
+    const mockFetch = makeOkFetch(CANNED_BUDGETS);
+    vi.stubGlobal('fetch', mockFetch);
+    await getBudgets();
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+    expect(options.body).toBeUndefined();
+  });
+
+  it('rejects with ApiError carrying the status on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    const err = await getBudgets().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(500);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await getBudgets().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.name).toBe('ApiError');
+  });
+});
+
+describe('putBudgets', () => {
+  it('PUTs the partial JSON body to /budgets', async () => {
+    const mockFetch = makeOkFetch(CANNED_BUDGETS);
+    vi.stubGlobal('fetch', mockFetch);
+    await putBudgets({ budgets: { Groceries: '250' } });
+    const [url, options] = mockFetch.mock.calls[0];
+    expect(url).toContain('/budgets');
+    expect(options.method).toBe('PUT');
+    expect(options.headers).toMatchObject({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(options.body)).toEqual({ budgets: { Groceries: '250' } });
+  });
+
+  it('serialises a null value (clear) in the body', async () => {
+    const mockFetch = makeOkFetch(CANNED_BUDGETS);
+    vi.stubGlobal('fetch', mockFetch);
+    await putBudgets({ budgets: { Groceries: null } });
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({ budgets: { Groceries: null } });
+  });
+
+  it('sends an empty object body when called with no argument', async () => {
+    const mockFetch = makeOkFetch(CANNED_BUDGETS);
+    vi.stubGlobal('fetch', mockFetch);
+    await putBudgets();
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({});
+  });
+
+  it('rejects with ApiError carrying the status on a 400 (invalid amount)', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(400));
+    const err = await putBudgets({ budgets: { Groceries: '-5' } }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(400);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await putBudgets({ budgets: {} }).catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getSubscriptions — v6 recurring-payment watch (read-only)
+// ---------------------------------------------------------------------------
+
+const CANNED_SUBSCRIPTIONS = {
+  count: 2,
+  subscriptions: [
+    {
+      merchant: 'STREAMCO',
+      direction: 'spend',
+      amount: '22.99',
+      first_seen_month: '2026-04',
+      last_seen_month: '2026-06',
+      status: 'active',
+    },
+    {
+      merchant: 'ACME SALARY',
+      direction: 'income',
+      amount: '5000.00',
+      first_seen_month: '2026-01',
+      last_seen_month: '2026-04',
+      status: 'ended',
+    },
+  ],
+};
+
+describe('getSubscriptions', () => {
+  it('GETs /subscriptions and resolves parsed JSON', async () => {
+    const mockFetch = makeOkFetch(CANNED_SUBSCRIPTIONS);
+    vi.stubGlobal('fetch', mockFetch);
+    const result = await getSubscriptions();
+    expect(result).toEqual(CANNED_SUBSCRIPTIONS);
+    expect(mockFetch.mock.calls[0][0]).toContain('/subscriptions');
+  });
+
+  it('sends an Accept: application/json header and no body', async () => {
+    const mockFetch = makeOkFetch(CANNED_SUBSCRIPTIONS);
+    vi.stubGlobal('fetch', mockFetch);
+    await getSubscriptions();
+    const options = mockFetch.mock.calls[0][1];
+    expect(options.headers).toMatchObject({ Accept: 'application/json' });
+    expect(options.body).toBeUndefined();
+  });
+
+  it('rejects with ApiError carrying the status on a non-2xx response', async () => {
+    vi.stubGlobal('fetch', makeErrorFetch(500));
+    const err = await getSubscriptions().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(500);
+  });
+
+  it('rejects with ApiError (not raw TypeError) on network failure', async () => {
+    vi.stubGlobal('fetch', makeNetworkFailFetch());
+    const err = await getSubscriptions().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.name).toBe('ApiError');
   });
 });
 

@@ -16,6 +16,12 @@ const SETTINGS_HTML = `
   <div id="settings-notifications"></div>
   <p id="settings-notifications-status" role="status"></p>
 
+  <div id="settings-budgets"></div>
+  <p id="settings-budgets-status" role="status"></p>
+
+  <div id="settings-subscriptions"></div>
+  <p id="settings-subscriptions-status" role="status"></p>
+
   <a id="settings-backup-link" href="#" download>Download backup (CSV)</a>
   <input id="settings-reset-input" type="text" />
   <button id="settings-reset-btn" type="button" disabled>Reset all data</button>
@@ -64,6 +70,9 @@ function makeApi(overrides = {}) {
   return {
     getSettings: vi.fn().mockResolvedValue(synthSettings()),
     putSettings: vi.fn().mockResolvedValue(synthSettings()),
+    getBudgets: vi.fn().mockResolvedValue({ categories: [], budgets: {} }),
+    putBudgets: vi.fn().mockResolvedValue({ categories: [], budgets: {} }),
+    getSubscriptions: vi.fn().mockResolvedValue({ count: 0, subscriptions: [] }),
     getCorrections: vi.fn().mockResolvedValue(synthCorrections()),
     deleteCorrection: vi.fn().mockResolvedValue({ ok: true, removed: 1 }),
     getCategoriserStatus: vi
@@ -108,7 +117,7 @@ describe('notification toggles', () => {
     await controller.load();
 
     const toggles = document.querySelectorAll('.settings-notif-toggle');
-    expect(toggles.length).toBe(9);
+    expect(toggles.length).toBe(14);
 
     const byType = {};
     for (const t of toggles) byType[t.dataset.type] = t.checked;
@@ -147,8 +156,220 @@ describe('notification toggles', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Monthly budgets editor
+// ---------------------------------------------------------------------------
+
+const BUDGET_CATEGORIES = [
+  'Groceries', 'Housing', 'Dining Out', 'Transport', 'Entertainment', 'Subscriptions', 'Other',
+];
+
+function synthBudgets(budgets = { Groceries: '250.00' }) {
+  return { categories: BUDGET_CATEGORIES, budgets };
+}
+
+describe('monthly budgets editor', () => {
+  it('renders one row per budgetable category from the API response', async () => {
+    const api = makeApi({ getBudgets: vi.fn().mockResolvedValue(synthBudgets()) });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const rows = document.querySelectorAll('.settings-budget-row');
+    expect(rows.length).toBe(7);
+    const labels = [...document.querySelectorAll('.settings-budget-label')].map((s) => s.textContent);
+    expect(labels).toEqual(BUDGET_CATEGORIES);
+  });
+
+  it('pre-fills the input with a set budget and leaves others blank', async () => {
+    const api = makeApi({ getBudgets: vi.fn().mockResolvedValue(synthBudgets()) });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const groceries = document.querySelector('.settings-budget-input[aria-label="Monthly budget for Groceries"]');
+    const housing = document.querySelector('.settings-budget-input[aria-label="Monthly budget for Housing"]');
+    expect(groceries.value).toBe('250.00');
+    expect(housing.value).toBe('');
+  });
+
+  it('calls putBudgets with the raw value on input change and shows "Saved."', async () => {
+    const api = makeApi({
+      getBudgets: vi.fn().mockResolvedValue(synthBudgets({})),
+      putBudgets: vi.fn().mockResolvedValue(synthBudgets({ Groceries: '300.00' })),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const input = document.querySelector('.settings-budget-input[aria-label="Monthly budget for Groceries"]');
+    input.value = '300';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+
+    expect(api.putBudgets).toHaveBeenCalledWith({ budgets: { Groceries: '300' } });
+    expect(document.getElementById('settings-budgets-status').textContent).toBe('Saved.');
+    // Re-rendered from the server-canonical response.
+    const after = document.querySelector('.settings-budget-input[aria-label="Monthly budget for Groceries"]');
+    expect(after.value).toBe('300.00');
+  });
+
+  it('calls putBudgets with null when the input is cleared to empty', async () => {
+    const api = makeApi({
+      getBudgets: vi.fn().mockResolvedValue(synthBudgets()),
+      putBudgets: vi.fn().mockResolvedValue(synthBudgets({})),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const input = document.querySelector('.settings-budget-input[aria-label="Monthly budget for Groceries"]');
+    input.value = '   ';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+
+    expect(api.putBudgets).toHaveBeenCalledWith({ budgets: { Groceries: null } });
+  });
+
+  it('Clear button PUTs null for that category', async () => {
+    const api = makeApi({
+      getBudgets: vi.fn().mockResolvedValue(synthBudgets()),
+      putBudgets: vi.fn().mockResolvedValue(synthBudgets({})),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const clear = document.querySelector('.settings-budget-clear[aria-label="Clear budget for Groceries"]');
+    expect(clear.disabled).toBe(false); // enabled because Groceries has a budget
+    clear.click();
+    await tick();
+
+    expect(api.putBudgets).toHaveBeenCalledWith({ budgets: { Groceries: null } });
+  });
+
+  it('disables the Clear button for a category with no budget set', async () => {
+    const api = makeApi({ getBudgets: vi.fn().mockResolvedValue(synthBudgets({})) });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const clear = document.querySelector('.settings-budget-clear[aria-label="Clear budget for Groceries"]');
+    expect(clear.disabled).toBe(true);
+  });
+
+  it('reverts the input and shows an error line when the save fails', async () => {
+    const api = makeApi({
+      getBudgets: vi.fn().mockResolvedValue(synthBudgets()),
+      putBudgets: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const input = document.querySelector('.settings-budget-input[aria-label="Monthly budget for Groceries"]');
+    input.value = '999';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+
+    expect(input.value).toBe('250.00'); // reverted to the previous saved value
+    expect(document.getElementById('settings-budgets-status').textContent).not.toBe('');
+  });
+
+  it('renders empty + error status when getBudgets fails, without throwing', async () => {
+    const api = makeApi({ getBudgets: vi.fn().mockRejectedValue(new Error('down')) });
+    controller = createSettings({ root: document, api });
+
+    await expect(controller.load()).resolves.toBeUndefined();
+
+    expect(document.querySelectorAll('.settings-budget-row').length).toBe(0);
+    expect(document.getElementById('settings-budgets-status').textContent).toContain('Could not load');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Learned corrections
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Subscriptions card (read-only)
+// ---------------------------------------------------------------------------
+
+function synthSubscriptions() {
+  return {
+    count: 2,
+    subscriptions: [
+      {
+        merchant: 'STREAMCO',
+        direction: 'spend',
+        amount: '22.99',
+        first_seen_month: '2026-04',
+        last_seen_month: '2026-06',
+        status: 'active',
+      },
+      {
+        merchant: 'ACME SALARY',
+        direction: 'income',
+        amount: '5000.00',
+        first_seen_month: '2026-01',
+        last_seen_month: '2026-04',
+        status: 'ended',
+      },
+    ],
+  };
+}
+
+describe('subscriptions card', () => {
+  it('renders one row per subscription with merchant, amount and last-seen', async () => {
+    const api = makeApi({
+      getSubscriptions: vi.fn().mockResolvedValue(synthSubscriptions()),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const rows = document.querySelectorAll('.settings-subscription-row');
+    expect(rows.length).toBe(2);
+
+    const first = rows[0];
+    expect(first.querySelector('.settings-subscription-name').textContent).toBe('STREAMCO');
+    expect(first.querySelector('.settings-subscription-amount').textContent).toBe('$22.99/month');
+    expect(first.querySelector('.settings-subscription-seen').textContent).toBe(
+      'Last seen 2026-06',
+    );
+  });
+
+  it('labels income rows as incoming and flags ended subscriptions', async () => {
+    const api = makeApi({
+      getSubscriptions: vi.fn().mockResolvedValue(synthSubscriptions()),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    const income = document.querySelectorAll('.settings-subscription-row')[1];
+    expect(income.querySelector('.settings-subscription-amount').textContent).toBe(
+      '$5000.00 incoming/month',
+    );
+    expect(income.querySelector('.settings-subscription-tag').textContent).toBe('Ended');
+  });
+
+  it('renders the empty state when no subscriptions are detected', async () => {
+    const api = makeApi({
+      getSubscriptions: vi.fn().mockResolvedValue({ count: 0, subscriptions: [] }),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load();
+
+    expect(document.querySelectorAll('.settings-subscription-row').length).toBe(0);
+    expect(document.querySelector('.settings-subscriptions-empty').textContent).toBe(
+      'No recurring payments detected yet.',
+    );
+  });
+
+  it('renders empty + error status when getSubscriptions fails, without throwing', async () => {
+    const api = makeApi({
+      getSubscriptions: vi.fn().mockRejectedValue(new Error('down')),
+    });
+    controller = createSettings({ root: document, api });
+    await controller.load(); // must not throw
+
+    expect(document.querySelectorAll('.settings-subscription-row').length).toBe(0);
+    expect(
+      document.getElementById('settings-subscriptions-status').textContent,
+    ).toContain('Could not load');
+  });
+});
 
 describe('learned corrections', () => {
   it('reflects the corrections_enabled opt-in from fetched settings', async () => {

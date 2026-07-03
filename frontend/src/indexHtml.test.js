@@ -61,12 +61,12 @@ describe('index.html — no new webfont dependency introduced', () => {
 // ---------------------------------------------------------------------------
 
 describe('index.html — nav order (v2 Pass 2)', () => {
-  it('lists data-view attributes in the exact order: upload, overview, trends, monthly, yearly, context, contact, settings', () => {
+  it('lists data-view attributes in the exact order: upload, overview, search, transfers, trends, monthly, yearly, context, contact, settings', () => {
     const navMatch = html.match(/<nav class="sidebar-nav"[^>]*>[\s\S]*?<\/nav>/);
     expect(navMatch).not.toBeNull();
     const dataViews = [...navMatch[0].matchAll(/data-view="([^"]+)"/g)].map((m) => m[1]);
     expect(dataViews).toEqual([
-      'upload', 'overview', 'trends', 'monthly', 'yearly', 'context', 'contact', 'settings',
+      'upload', 'overview', 'search', 'transfers', 'trends', 'monthly', 'yearly', 'context', 'contact', 'settings',
     ]);
   });
 

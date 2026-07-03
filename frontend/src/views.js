@@ -15,6 +15,14 @@ const VIEW_COPY = {
     title: 'Upload',
     subtitle: 'Drop your CommBank and Westpac exports (CSV or XLSX) to categorise the month.',
   },
+  search: {
+    title: 'Search',
+    subtitle: 'Find any transaction by description or category.',
+  },
+  transfers: {
+    title: 'Transfers',
+    subtitle: 'Money moved between your own accounts, matched and excluded from spending.',
+  },
   context: {
     title: 'Category context',
     subtitle:

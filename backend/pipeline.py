@@ -7,6 +7,9 @@ Composes the already-built stages in the exact order defined by the spec:
              re-fingerprinted, but its parsed rows still flow into balance
              reconciliation and Layer 2's dedupe.
   Layer 2  — per-transaction fingerprint dedupe (skip rows already in the store)
+  Layer 2.5 — deterministic transfer netting, local only, no LLM: match cross-bank
+             internal transfers and tag both legs 'Transfer' so they drop out of the
+             LLM payload and every spending aggregate.
   Layer 3  — categorise only-new rows via the sanitiser + analyser
   Output   — one monthly Excel workbook per distinct month; optional Drive upload
   Notify   — best-effort Web Push from the catalog (processed / categorisation_failed
@@ -58,6 +61,8 @@ from backend.store.splitwise_rule import match_splitwise_tag
 from backend.excel_builder import build_workbook
 from backend.drive_uploader import upload_file
 from backend.notifier import send_notification
+from backend.budget_alerts import check_budget_alerts
+from backend.subscriptions import check_subscriptions
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,7 @@ class RunReport:
     year_month: str | None    # "YYYY-MM" of the last month produced, or None on no-op
     errors: list[str]         # safe human-readable messages; never raw txn/account text
     balance_updates: int      # rows whose balance was corrected in place this run (Q3)
+    transfer_pairs: int       # internal cross-bank transfer pairs netted this run (0 on no-op)
 
 
 @dataclass(frozen=True)
@@ -153,6 +159,7 @@ def _categorise_pending(
     sanitise_log_dir=None,
     output_dir=None,
     errors: list[str],
+    extra_months: tuple[str, ...] = (),
 ) -> _CategoriseOutcome:
     """Categorise EVERY currently-uncategorised row, then rebuild affected months.
 
@@ -246,11 +253,16 @@ def _categorise_pending(
     year_month: str | None = None
     drive_failed_month: str | None = None
 
+    # extra_months carries months whose only new rows this run were internal transfers
+    # (tagged locally by detect_transfers, so they never appear in to_categorise). They
+    # still need their workbook rebuilt — but only when categorisation did not wholly
+    # fail, preserving the no-partial-backup rule.
     months: list[str] = []
     if not categorisation_failed:
         months = sorted(
             {row.date[:7] for row in to_categorise}
             | {row.date[:7] for row in tagged_rows}
+            | set(extra_months)
         )
 
     for ym in months:
@@ -470,10 +482,20 @@ def run_pipeline(
             year_month=None,
             errors=errors,
             balance_updates=0,
+            transfer_pairs=0,
         )
 
     # Persist the new rows (upsert — balance-only on conflict; double-run safe).
     store.add_new(result)
+
+    # ------------------------------------------------------------------
+    # Layer 2.5 — deterministic internal-transfer netting (LOCAL, no LLM).
+    # ------------------------------------------------------------------
+    # Runs AFTER add_new (so both legs are stored) and BEFORE _categorise_pending
+    # (so a matched pair's non-NULL 'Transfer' category keeps it OUT of the
+    # uncategorised() set and therefore out of the sanitised off-machine payload).
+    # Idempotent and zero-network.
+    transfer_result = store.detect_transfers()
 
     # ------------------------------------------------------------------
     # Layer 3 (categorise only-new, FR-14) + Output (Excel + optional Drive).
@@ -491,6 +513,7 @@ def run_pipeline(
         sanitise_log_dir=sanitise_log_dir,
         output_dir=output_dir,
         errors=errors,
+        extra_months=transfer_result.affected_months,
     )
     categorised = outcome.categorised
     model_used = outcome.model_used
@@ -511,6 +534,11 @@ def run_pipeline(
     # Best-effort + fail-closed (see _notify / backend.notifier): a hard no-op
     # unless push is enabled with real VAPID keys AND a subscription exists, and
     # a notifier failure never breaks the run. Copy is counts/status only.
+    #
+    # Budget alerts (v6) are sent AFTER this terminal notification and are
+    # ADDITIONAL to it (the "exactly one terminal notification" rule is unchanged).
+    # check_budget_alerts is guarded and deduped once-per-month per category, so it
+    # sends at most one per budgeted category and in practice nothing on a repeat.
     # ------------------------------------------------------------------
     remaining_uncat = len(store.uncategorised())
     if categorisation_failed or remaining_uncat > 0:
@@ -530,6 +558,14 @@ def run_pipeline(
     else:
         _notify(store, "processed", count=categorised)
 
+    # Additional, guarded budget-threshold alerts for the latest data month. Only on
+    # this non-noop path — a re-ingested identical file returns early above and stays
+    # a pure no-op (no check, no claim, no send).
+    check_budget_alerts(store)
+    # Guarded recurring-merchant (subscription) detection over the latest data. Only on
+    # this non-noop path; a re-ingested identical file never reaches it (see above).
+    check_subscriptions(store)
+
     return RunReport(
         files_seen=len(uploads),
         files_skipped=skipped,
@@ -542,6 +578,7 @@ def run_pipeline(
         year_month=year_month,
         errors=errors,
         balance_updates=balance_updates,
+        transfer_pairs=transfer_result.pairs_created,
     )
 
 
@@ -593,12 +630,18 @@ def retry_uncategorised(
 
     if outcome.categorisation_failed:
         # OpenRouter down / all tiers failed — rows stay pending, safe status string.
+        # Categories are unchanged on this branch, so no budget re-check is needed.
         return {
             "ok": False,
             "categorised": 0,
             "remaining": len(store.uncategorised()),
             "detail": "categoriser unavailable",
         }
+
+    # A successful pass may have moved rows into budgeted categories — guarded check.
+    check_budget_alerts(store)
+    # Newly-categorised rows can also complete a recurring-merchant streak — guarded.
+    check_subscriptions(store)
 
     return {
         "ok": True,

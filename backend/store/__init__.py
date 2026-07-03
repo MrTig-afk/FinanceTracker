@@ -25,16 +25,18 @@ opened and no file is created by a bare ``import backend.store``.
 from __future__ import annotations
 
 from .category_context import CategoryContext, DEFAULT_CONTEXT
-from .schema import init_schema
+from .schema import init_schema, init_search_index, search_index_available
 from .store import (
     MonthRow,
     Store,
+    TransferDetectResult,
     UncategorisedRow,
     amount_from_text,
     amount_to_text,
     resolve_db_path,
 )
-from .taxonomy import TAXONOMY, OTHER, coerce_category
+from .taxonomy import BUDGET_CATEGORIES, TAXONOMY, OTHER, coerce_category
+from .transfer_rule import TRANSFER_CATEGORY
 
 __all__ = [
     # Core class and path resolver
@@ -43,10 +45,17 @@ __all__ = [
     # Return row types
     "UncategorisedRow",
     "MonthRow",
+    "TransferDetectResult",
+    # Internal-transfer netting (reserved system label + detection result)
+    "TRANSFER_CATEGORY",
     # Schema free function (for callers that manage their own sqlite3.Connection)
     "init_schema",
+    # Full-text search index helpers (used by Store + tests for the LIKE fallback)
+    "init_search_index",
+    "search_index_available",
     # Taxonomy
     "TAXONOMY",
+    "BUDGET_CATEGORIES",
     "OTHER",
     "coerce_category",
     # Category context (D1 fixed taxonomy / D2 pre-filled example hints)

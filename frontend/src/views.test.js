@@ -14,6 +14,8 @@ const SHELL_HTML = `
   <nav>
     <a href="#" class="nav-item" data-view="upload">Upload</a>
     <a href="#" class="nav-item nav-item--active" data-view="overview">Overview</a>
+    <a href="#" class="nav-item" data-view="search">Search</a>
+    <a href="#" class="nav-item" data-view="transfers">Transfers</a>
     <a href="#" class="nav-item" data-view="trends">Trends</a>
     <a href="#" class="nav-item" data-view="monthly">Monthly</a>
     <a href="#" class="nav-item" data-view="yearly">Yearly</a>
@@ -31,6 +33,15 @@ const SHELL_HTML = `
       <div class="overview-grid">
         <section class="card donut-card"></section>
       </div>
+    </section>
+    <section class="view" data-view="search" hidden>
+      <input id="search-input" type="search" />
+      <p id="search-message"></p>
+      <div id="search-results"></div>
+    </section>
+    <section class="view" data-view="transfers" hidden>
+      <p id="transfers-message"></p>
+      <div id="transfers-list"></div>
     </section>
     <section class="view" data-view="upload" hidden>
       <section id="upload-card" class="card upload">
@@ -160,12 +171,12 @@ describe('clicking a nav item', () => {
 // ---------------------------------------------------------------------------
 
 describe('nav order', () => {
-  it('lists nav items in the exact order Upload, Overview, Trends, Monthly, Yearly, Category context', () => {
+  it('lists nav items in the exact order Upload, Overview, Search, Transfers, Trends, Monthly, Yearly, Category context', () => {
     const items = Array.from(document.querySelectorAll('nav > *')).map(
       (el) => el.dataset.view ?? el.textContent.trim(),
     );
     expect(items).toEqual([
-      'upload', 'overview', 'trends', 'monthly', 'yearly', 'context', 'contact', 'settings',
+      'upload', 'overview', 'search', 'transfers', 'trends', 'monthly', 'yearly', 'context', 'contact', 'settings',
     ]);
   });
 });
