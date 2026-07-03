@@ -13,6 +13,7 @@
 
 import { fetchCategoryTransactions, postCategoryOverride, getSettings } from './api.js';
 import { formatCurrency } from './summary.js';
+import { buildRowMain } from './transactionRow.js';
 
 /**
  * The 8 canonical taxonomy labels an owner can reassign a transaction to.
@@ -113,27 +114,8 @@ export function createCategoryDrawer({
     const row = doc.createElement('div');
     row.className = 'cat-drawer-row';
 
-    const main = doc.createElement('div');
-    main.className = 'cat-drawer-row-main';
-
-    const date = doc.createElement('span');
-    date.className = 'cat-drawer-date';
-    date.textContent = t.date;
-
-    const desc = doc.createElement('span');
-    desc.className = 'cat-drawer-desc';
-    desc.textContent = t.description;
-
-    const amount = doc.createElement('span');
-    amount.className = 'cat-drawer-amount';
-    amount.textContent = formatCurrency(t.amount);
-    const n = Number(t.amount);
-    amount.classList.toggle('is-negative', Number.isFinite(n) && n < 0);
-    amount.classList.toggle('is-positive', Number.isFinite(n) && n >= 0);
-
-    main.appendChild(date);
-    main.appendChild(desc);
-    main.appendChild(amount);
+    // Shared with the Search view — identical date/desc/amount DOM + classes.
+    const main = buildRowMain(doc, t);
 
     const inTaxonomy = TAXONOMY_LABELS.includes(currentCategory);
 
