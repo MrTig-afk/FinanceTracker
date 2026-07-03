@@ -22,6 +22,11 @@ TAXONOMY: tuple[str, ...] = (
 
 OTHER = "Other"
 
+# Categories that may carry a monthly budget — every taxonomy label except Income.
+# Income is credits (money in), not spend, so a monthly "budget" on it is meaningless
+# for v1. 'Uncategorised' and 'Transfer' are never taxonomy members, so never budgetable.
+BUDGET_CATEGORIES: tuple[str, ...] = tuple(c for c in TAXONOMY if c != "Income")
+
 _TAXONOMY_SET: frozenset[str] = frozenset(TAXONOMY)
 
 

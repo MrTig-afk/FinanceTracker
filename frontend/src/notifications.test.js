@@ -55,6 +55,11 @@ describe('kindForType', () => {
     }
   });
 
+  it('maps budget_exceeded to "error" and budget_approaching to "info"', () => {
+    expect(kindForType('budget_exceeded')).toBe('error');
+    expect(kindForType('budget_approaching')).toBe('info');
+  });
+
   it('maps processed/recovered types to "success"', () => {
     for (const t of ['processed', 'processed_recovered', 'categorisation_recovered']) {
       expect(kindForType(t)).toBe('success');

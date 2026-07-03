@@ -23,6 +23,7 @@ export function kindForType(type) {
     case 'categorisation_failed':
     case 'drive_backup_failed':
     case 'generic_error':
+    case 'budget_exceeded':
       return 'error';
     case 'processed':
     case 'processed_recovered':
@@ -30,6 +31,7 @@ export function kindForType(type) {
       return 'success';
     case 'duplicate_noop':
     case 'monthly_reminder':
+    case 'budget_approaching':
     default:
       return 'info';
   }
