@@ -17,10 +17,26 @@ export class ApiError extends Error {
 }
 
 /**
+ * Deadline for the summary fetch. When the laptop is off but the Tailscale
+ * route still exists, a fetch to it does not fail — it HANGS until the OS
+ * connection timeout (60s+ on iOS), leaving the owner staring at a loading
+ * state. Aborting after a short deadline turns that hang into a normal
+ * network error, which the dashboard answers with the offline snapshot.
+ */
+const SUMMARY_TIMEOUT_MS = 8000;
+
+/** AbortSignal.timeout where supported (iOS 16.4+); undefined elsewhere. */
+function _deadline(ms) {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(ms)
+    : undefined;
+}
+
+/**
  * Fetch the monthly summary from the backend.
  * @param {string|undefined} month  Optional 'YYYY-MM'. Omitted → backend returns latest.
  * @returns {Promise<object>}       Parsed JSON summary object.
- * @throws {ApiError}               On network failure or non-2xx response.
+ * @throws {ApiError}               On network failure, timeout, or non-2xx response.
  */
 export async function fetchSummary(month) {
   let url = `${API_BASE}/summary`;
@@ -30,7 +46,10 @@ export async function fetchSummary(month) {
 
   let res;
   try {
-    res = await fetch(url, { headers: { Accept: 'application/json' } });
+    res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: _deadline(SUMMARY_TIMEOUT_MS),
+    });
   } catch (e) {
     throw new ApiError('network error', { cause: e });
   }

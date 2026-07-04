@@ -107,6 +107,16 @@ describe('fetchSummary', () => {
     expect(calledUrl).not.toContain('?');
   });
 
+  it('passes an abort signal so an unreachable laptop cannot hang the load', async () => {
+    const mockFetch = makeOkFetch();
+    vi.stubGlobal('fetch', mockFetch);
+    await fetchSummary('2026-06');
+    const options = mockFetch.mock.calls[0][1];
+    // Engines with AbortSignal.timeout (Node 18+, iOS 16.4+) get a real
+    // signal; the guarded helper returns undefined only on engines without it.
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('sends an Accept: application/json header', async () => {
     const mockFetch = makeOkFetch();
     vi.stubGlobal('fetch', mockFetch);

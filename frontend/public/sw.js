@@ -141,38 +141,54 @@ self.addEventListener('fetch', (e) => {
   if (policy === 'shell-cache') {
     // Navigations (index.html) are network-first so a new deploy is picked up on
     // the next load: fetch fresh HTML (and thus fresh hashed asset refs), refresh
-    // the cache, and fall back to cache only when offline.
+    // the cache, and fall back to cache when offline OR when the network hangs.
+    //
+    // The deadline matters: with the Tailscale route up but the laptop off, a
+    // fetch does not fail — it hangs until the OS timeout (60s+ on iOS), which
+    // reads as a blank screen. Abort after a few seconds and serve the cached
+    // shell instead; the next reachable visit refreshes the cache as usual.
     if (e.request.mode === 'navigate') {
+      const NAV_TIMEOUT_MS = 3500;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), NAV_TIMEOUT_MS);
       e.respondWith(
-        fetch(e.request)
+        fetch(e.request, { signal: controller.signal })
           .then((res) => {
+            clearTimeout(timer);
             const clone = res.clone();
             caches.open(CACHE).then((c) => c.put(e.request, clone));
             return res;
           })
-          .catch(() =>
-            caches
+          .catch(() => {
+            clearTimeout(timer);
+            return caches
               .match(e.request)
-              .then((cached) => cached || caches.match('/index.html')),
-          ),
+              .then((cached) => cached || caches.match('/index.html'));
+          }),
       );
       return;
     }
 
-    // Hashed assets (.js/.css) are cache-first — safe because the filename hash
-    // changes each build, so a new build is a new URL (no staleness).
+    // Hashed assets (.js/.css/.svg) are cache-first — safe because the filename
+    // hash changes each build, so a new build is a new URL (no staleness). The
+    // network fill gets the same short deadline as navigations so an unreachable
+    // laptop can never hang an asset load for the OS timeout.
     e.respondWith(
       caches.match(e.request).then((cached) => {
         if (cached) return cached;
 
-        return fetch(e.request)
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        return fetch(e.request, { signal: controller.signal })
           .then((res) => {
+            clearTimeout(timer);
             // Cache a clone; return the original.
             const clone = res.clone();
             caches.open(CACHE).then((c) => c.put(e.request, clone));
             return res;
           })
           .catch(() => {
+            clearTimeout(timer);
             // No cache and no network — let the failure propagate.
             return undefined;
           });
