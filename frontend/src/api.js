@@ -23,7 +23,7 @@ export class ApiError extends Error {
  * state. Aborting after a short deadline turns that hang into a normal
  * network error, which the dashboard answers with the offline snapshot.
  */
-const SUMMARY_TIMEOUT_MS = 8000;
+const SUMMARY_TIMEOUT_MS = 5000;
 
 /** AbortSignal.timeout where supported (iOS 16.4+); undefined elsewhere. */
 function _deadline(ms) {

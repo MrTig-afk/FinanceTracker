@@ -148,7 +148,10 @@ self.addEventListener('fetch', (e) => {
     // reads as a blank screen. Abort after a few seconds and serve the cached
     // shell instead; the next reachable visit refreshes the cache as usual.
     if (e.request.mode === 'navigate') {
-      const NAV_TIMEOUT_MS = 3500;
+      // 1.5s: aggressive by design — the cached shell is almost always the
+      // current build anyway, so a slow network just means cache-first with a
+      // one-visit delay on picking up a new deploy.
+      const NAV_TIMEOUT_MS = 1500;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), NAV_TIMEOUT_MS);
       e.respondWith(
