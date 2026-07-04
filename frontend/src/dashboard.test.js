@@ -134,6 +134,9 @@ let dash;
 beforeEach(() => {
   document.body.innerHTML = DOM_HTML;
   Chart.mockClear();
+  // render() persists a device-local summary snapshot; clear it so the
+  // offline-fallback path never leaks between tests.
+  localStorage.clear();
 
   // Fire the rAF callback immediately with a large timestamp so the
   // ease-out-cubic tween's `p` hits 1 on the very first (synchronous) frame.
@@ -596,6 +599,76 @@ describe('showError', () => {
     const err = new ApiError('network error');
     expect(() => dash.showError(err)).not.toThrow();
     expect(document.getElementById('message').textContent).toContain('Could not load summary');
+  });
+
+  it('adds the Tailscale hint only for network-level failures (no status)', () => {
+    dash.showError(new ApiError('network error'));
+    expect(document.getElementById('message').textContent).toContain('Tailscale');
+
+    dash.showError(new ApiError('server error', { status: 500 }));
+    expect(document.getElementById('message').textContent).not.toContain('Tailscale');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Offline fallback — device-local last-known summary snapshot
+// ---------------------------------------------------------------------------
+
+describe('offline snapshot fallback', () => {
+  it('render() stores the summary in localStorage under ft_last_summary', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const raw = localStorage.getItem('ft_last_summary');
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw);
+    expect(parsed.summary.year_month).toBe(SYNTHETIC_SUMMARY.year_month);
+    expect(typeof parsed.saved_at).toBe('string');
+  });
+
+  it('showError() with a snapshot renders the stale data and an offline banner', () => {
+    dash.render(SYNTHETIC_SUMMARY); // fills the snapshot
+    Chart.mockClear();
+
+    dash.showError(new ApiError('network error'));
+
+    // The stale summary was re-rendered (a chart was built again)…
+    expect(Chart).toHaveBeenCalled();
+    // …and the banner explains the state instead of the generic error.
+    const text = document.getElementById('message').textContent;
+    expect(text).toContain('Offline - showing data from');
+    expect(text).toContain('New uploads will be queued.');
+    expect(text).not.toContain('Could not load summary');
+  });
+
+  it('restoring from the snapshot does not refresh its saved_at timestamp', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    const before = JSON.parse(localStorage.getItem('ft_last_summary')).saved_at;
+
+    dash.showError(new ApiError('network error')); // re-renders from snapshot
+    const after = JSON.parse(localStorage.getItem('ft_last_summary')).saved_at;
+    expect(after).toBe(before);
+  });
+
+  it('corrupt snapshot JSON falls back to the plain error path (fail closed)', () => {
+    localStorage.setItem('ft_last_summary', '{not json');
+    dash.showError(new ApiError('network error'));
+    expect(document.getElementById('message').textContent).toContain('Could not load summary');
+  });
+
+  it('snapshot without a summary object falls back to the plain error path', () => {
+    localStorage.setItem('ft_last_summary', JSON.stringify({ saved_at: 'x' }));
+    dash.showError(new ApiError('network error'));
+    expect(document.getElementById('message').textContent).toContain('Could not load summary');
+  });
+
+  it('unparseable saved_at renders the fallback date label, not "Invalid Date"', () => {
+    localStorage.setItem(
+      'ft_last_summary',
+      JSON.stringify({ saved_at: 'garbage', summary: SYNTHETIC_SUMMARY }),
+    );
+    dash.showError(new ApiError('network error'));
+    const text = document.getElementById('message').textContent;
+    expect(text).toContain('an earlier session');
+    expect(text).not.toContain('Invalid Date');
   });
 });
 

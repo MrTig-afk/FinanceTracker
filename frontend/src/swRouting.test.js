@@ -133,3 +133,67 @@ describe('routeRequest — passthrough', () => {
     expect(routeRequest('https://host/app.js', 'DELETE')).toBe('passthrough');
   });
 });
+
+// ---------------------------------------------------------------------------
+// v7 offline-resilience additions: SVG marks cached, all data endpoints
+// network-only, explicit origin enforcement.
+// ---------------------------------------------------------------------------
+
+describe('routeRequest — SVG marks are shell-cache (offline logos)', () => {
+  const marks = [
+    '/finance-tracker-mark.svg',
+    '/finance-tracker-app-icon.svg',
+    '/commbank-mark.svg',
+    '/westpac-mark.svg',
+    '/icon.svg',
+  ];
+  for (const p of marks) {
+    it(`GET ${p} → shell-cache`, () => {
+      expect(routeRequest(`https://host${p}`, 'GET')).toBe('shell-cache');
+    });
+  }
+
+  it('POST to an svg → passthrough (not GET)', () => {
+    expect(routeRequest('https://host/icon.svg', 'POST')).toBe('passthrough');
+  });
+});
+
+describe('routeRequest — every data endpoint is network-only', () => {
+  const dataPaths = [
+    '/month', '/year', '/trends', '/search', '/transfers', '/budgets',
+    '/balances', '/categoriser/scorecard', '/category-transactions',
+    '/category-override', '/category-context', '/subscriptions',
+    '/corrections', '/settings', '/reclassify', '/reset',
+    '/export/transactions.csv', '/push/subscribe', '/notify/monthly-reminder',
+  ];
+  for (const p of dataPaths) {
+    it(`GET ${p} → network-only`, () => {
+      expect(routeRequest(`https://host${p}`, 'GET')).toBe('network-only');
+    });
+  }
+
+  it('a query string does not change the policy', () => {
+    expect(routeRequest('https://host/search?q=coffee', 'GET')).toBe('network-only');
+  });
+});
+
+describe('routeRequest — origin enforcement when selfOrigin is provided', () => {
+  const SELF = 'https://host';
+
+  it('same-origin svg → shell-cache', () => {
+    expect(routeRequest('https://host/icon.svg', 'GET', SELF)).toBe('shell-cache');
+  });
+
+  it('cross-origin svg → passthrough (never cached)', () => {
+    expect(routeRequest('https://evil.example/icon.svg', 'GET', SELF)).toBe('passthrough');
+  });
+
+  it('cross-origin js/css → passthrough', () => {
+    expect(routeRequest('https://cdn.example/lib.js', 'GET', SELF)).toBe('passthrough');
+    expect(routeRequest('https://cdn.example/lib.css', 'GET', SELF)).toBe('passthrough');
+  });
+
+  it('cross-origin path that LOOKS like an API path → passthrough, not network-only', () => {
+    expect(routeRequest('https://evil.example/summary', 'GET', SELF)).toBe('passthrough');
+  });
+});

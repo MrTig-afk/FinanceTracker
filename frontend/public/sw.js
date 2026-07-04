@@ -14,29 +14,70 @@
 
 'use strict';
 
-const CACHE = 'financetracker-shell-v2';
+const CACHE = 'financetracker-shell-v3';
 
-// App-shell files to pre-cache on install.
+// App-shell files to pre-cache on install. The SVG marks are included so the
+// FinanceTracker/bank logos still render while the backend is unreachable.
 // Hashed JS/CSS assets are added opportunistically by the fetch handler;
 // do NOT hardcode Vite-generated hashed filenames here.
-const SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg'];
+const SHELL = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/icon.svg',
+  '/finance-tracker-mark.svg',
+  '/finance-tracker-app-icon.svg',
+  '/commbank-mark.svg',
+  '/westpac-mark.svg',
+];
 
-// API paths whose responses must NEVER be cached.
-const API_PATHS = ['/upload', '/summary', '/status'];
+// API paths whose responses must NEVER be cached (kept in sync with
+// src/swRouting.js — every data-bearing endpoint listed explicitly).
+const API_PATHS = [
+  '/upload',
+  '/summary',
+  '/status',
+  '/month',
+  '/year',
+  '/trends',
+  '/search',
+  '/transfers',
+  '/budgets',
+  '/balances',
+  '/categoriser',
+  '/category-transactions',
+  '/category-override',
+  '/category-context',
+  '/subscriptions',
+  '/corrections',
+  '/settings',
+  '/reclassify',
+  '/reset',
+  '/export',
+  '/push',
+  '/notify',
+];
 
 /**
  * Routing policy — inlined copy of src/swRouting.js routeRequest().
  * @param {string} url
  * @param {string} method
+ * @param {string} [selfOrigin]
  * @returns {'network-only' | 'shell-cache' | 'passthrough'}
  */
-function routeRequest(url, method) {
-  let pathname;
+function routeRequest(url, method, selfOrigin) {
+  let parsed;
   try {
-    pathname = new URL(url).pathname;
+    parsed = new URL(url);
   } catch {
     return 'passthrough';
   }
+
+  if (selfOrigin && parsed.origin !== selfOrigin) {
+    return 'passthrough';
+  }
+
+  const pathname = parsed.pathname;
 
   for (const p of API_PATHS) {
     if (pathname === p || pathname.startsWith(p + '/')) {
@@ -49,7 +90,7 @@ function routeRequest(url, method) {
       pathname === '/' ||
       pathname === '/index.html' ||
       pathname === '/manifest.webmanifest' ||
-      pathname === '/icon.svg' ||
+      pathname.endsWith('.svg') ||
       pathname.endsWith('.js') ||
       pathname.endsWith('.css')
     ) {
@@ -89,7 +130,7 @@ self.addEventListener('activate', (e) => {
 // ---------------------------------------------------------------------------
 
 self.addEventListener('fetch', (e) => {
-  const policy = routeRequest(e.request.url, e.request.method);
+  const policy = routeRequest(e.request.url, e.request.method, self.location.origin);
 
   if (policy === 'network-only') {
     // Do NOT call e.respondWith — let the browser fetch normally.

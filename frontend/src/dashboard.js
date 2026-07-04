@@ -89,6 +89,59 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
     }
   }
 
+  // --- Last-known summary snapshot (offline fallback) -----------------------
+  //
+  // PRIVACY: this stores the owner's own summary on the owner's own device —
+  // the same device that renders it. The service-worker rule (API responses
+  // are never cached in the SW cache) is untouched; this is a deliberate,
+  // app-level, device-local snapshot so the dashboard can show the last synced
+  // data while the laptop or the Tailscale link is unreachable.
+
+  /** localStorage key for the last successfully rendered summary. */
+  const SNAPSHOT_KEY = 'ft_last_summary';
+
+  // True while re-rendering FROM the snapshot, so the restore does not
+  // overwrite the snapshot's saved_at with the render time.
+  let restoringSnapshot = false;
+
+  function _saveSnapshot(summary) {
+    if (restoringSnapshot) return;
+    try {
+      localStorage.setItem(
+        SNAPSHOT_KEY,
+        JSON.stringify({ saved_at: new Date().toISOString(), summary }),
+      );
+    } catch {
+      // Private browsing / storage disabled / quota — the snapshot is a
+      // nice-to-have, never worth breaking a render over.
+    }
+  }
+
+  /** @returns {{ summary: object, savedAt: string } | null} */
+  function _loadSnapshot() {
+    try {
+      const raw = localStorage.getItem(SNAPSHOT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      if (!parsed.summary || typeof parsed.summary !== 'object') return null;
+      return { summary: parsed.summary, savedAt: String(parsed.saved_at || '') };
+    } catch {
+      return null; // corrupt JSON / storage error — fail closed to the error path
+    }
+  }
+
+  function _snapshotDateLabel(savedAt) {
+    const t = Date.parse(savedAt);
+    if (Number.isNaN(t)) return 'an earlier session';
+    return new Date(t).toLocaleString('en-AU', {
+      day: 'numeric',
+      month: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
   function _currentSurfaceColor() {
     const el = doc.documentElement || document.documentElement;
     return getComputedStyle(el).getPropertyValue('--surface');
@@ -414,6 +467,7 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
    */
   function render(summary, { pulse = false } = {}) {
     lastSummary = summary;
+    _saveSnapshot(summary);
 
     // Subtitle + sidebar footer
     const label = monthLabel(summary.year_month);
@@ -490,15 +544,37 @@ export function createDashboard(root = document, { onCategorySelect } = {}) {
   }
 
   /**
-   * Show a generic error message.
+   * Show a fetch-failure state.
+   * When a device-local snapshot of the last successful summary exists, render
+   * it and banner "showing data from <date>" — the offline mode the app was
+   * always meant to have (uploads queue separately via queue.js). Without a
+   * snapshot, fall back to the plain error, adding a Tailscale hint for
+   * network-level failures (no HTTP status = the laptop was never reached).
    * Never exposes raw response bodies, stack traces, or transaction data.
    * @param {import('./api.js').ApiError} err
    */
   function showError(err) {
+    const snapshot = _loadSnapshot();
+    if (snapshot) {
+      restoringSnapshot = true;
+      try {
+        render(snapshot.summary);
+      } finally {
+        restoringSnapshot = false;
+      }
+      _showMessage(
+        `Offline - showing data from ${_snapshotDateLabel(snapshot.savedAt)}. ` +
+          'New uploads will be queued.',
+      );
+      return;
+    }
+
     _destroyChart();
     _clearLegend();
     const statusPart = err && err.status ? ` (status ${err.status})` : '';
-    _showMessage(`Could not load summary.${statusPart}`);
+    const hint =
+      err && err.status ? '' : ' Check that Tailscale is connected on this device.';
+    _showMessage(`Could not load summary.${statusPart}${hint}`);
   }
 
   /**
