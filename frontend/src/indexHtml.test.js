@@ -332,6 +332,30 @@ describe('index.html — upload redesign (branded dropzones)', () => {
   });
 });
 
+describe('index.html — bank web-login links on the dropzones', () => {
+  it('links to the NetBank and Westpac online banking login pages', () => {
+    expect(html).toContain(
+      'href="https://www.my.commbank.com.au/netbank/Logon/Logon.aspx"',
+    );
+    expect(html).toContain(
+      'href="https://banking.westpac.com.au/wbc/banking/handler?fi=wbc&amp;TAM_OP=login&amp;segment=personal&amp;logout=false"',
+    );
+  });
+
+  it('has exactly two login links, one per dropzone', () => {
+    expect(html.match(/class="zone-login-link"/g)).toHaveLength(2);
+  });
+
+  it('every login link opens in a new tab with noopener noreferrer', () => {
+    const anchors = html.match(/<a\s+class="zone-login-link"[\s\S]*?>/g) ?? [];
+    expect(anchors).toHaveLength(2);
+    for (const anchor of anchors) {
+      expect(anchor).toContain('target="_blank"');
+      expect(anchor).toContain('rel="noopener noreferrer"');
+    }
+  });
+});
+
 describe('index.html — preview panel', () => {
   it('has a #preview-card with tabs, meta, table body, and note', () => {
     expect(html).toContain('id="preview-card"');

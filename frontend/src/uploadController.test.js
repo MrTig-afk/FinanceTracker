@@ -32,6 +32,9 @@ function csvFile(name = 'commbank.csv') {
 function zoneHtml(bank) {
   return `
     <div id="dropzone-${bank}" class="zone" tabindex="0" role="button">
+      <div class="zone-top">
+        <a class="zone-login-link" href="#" target="_blank" rel="noopener noreferrer">Open ${bank} login</a>
+      </div>
       <div class="zone-body">
         <div class="zone-empty" data-bank-empty="${bank}">
           <span class="zone-hint">Drop file or click to browse</span>
@@ -665,5 +668,29 @@ describe('preview tab switching', () => {
     const active = document.querySelector('#preview-tabs .ptab.active');
     expect(active.dataset.bank).toBe('westpac');
     expect(document.getElementById('preview-note').textContent).toContain('No Westpac file staged');
+  });
+});
+
+describe('bank web-login link inside the dropzone', () => {
+  it('does NOT open the file picker when the login link is clicked', () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    const input = document.getElementById('file-commbank');
+    const pickerSpy = vi.spyOn(input, 'click');
+    const link = document.querySelector('#dropzone-commbank .zone-login-link');
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(pickerSpy).not.toHaveBeenCalled();
+  });
+
+  it('still opens the file picker when the zone body is clicked', () => {
+    controller = createUploadController({ root: document, queue, postFn: vi.fn() });
+
+    const input = document.getElementById('file-westpac');
+    const pickerSpy = vi.spyOn(input, 'click');
+    const hint = document.querySelector('#dropzone-westpac .zone-hint');
+    hint.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+
+    expect(pickerSpy).toHaveBeenCalledOnce();
   });
 });

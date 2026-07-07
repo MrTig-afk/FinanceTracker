@@ -343,8 +343,13 @@ export function createUploadController({
         _handleFile(bank, file);
       });
 
-      // Click the zone to open the file picker programmatically.
-      _on(zone, 'click', () => {
+      // Click the zone to open the file picker programmatically. Two clicks
+      // must NOT re-open the picker: one on a link inside the zone (the bank
+      // web-login anchor navigates in its own tab instead), and the input's
+      // own click bubbling back up (would recurse into input.click()).
+      _on(zone, 'click', (e) => {
+        if (e.target === input) return;
+        if (e.target && e.target.closest && e.target.closest('a')) return;
         if (input) input.click();
       });
     }
