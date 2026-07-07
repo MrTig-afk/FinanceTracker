@@ -196,6 +196,28 @@ describe('best-effort load() — fetchFn rejects', () => {
     const msg = document.getElementById('overview-trend-message');
     expect(msg.textContent).not.toContain('SYNTH_SECRET_STACK_DETAIL');
   });
+
+  it('keeps the message hidden — the offline banner owns the explanation', async () => {
+    const fetchFn = vi.fn().mockRejectedValue(new Error('network down'));
+    controller = createOverviewTrend({ root: document, fetchFn });
+    await controller.load();
+
+    expect(document.getElementById('overview-trend-message').hidden).toBe(true);
+  });
+
+  it('hides a previously shown message when a later load fails', async () => {
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(EMPTY_TRENDS)
+      .mockRejectedValueOnce(new Error('network down'));
+    controller = createOverviewTrend({ root: document, fetchFn });
+
+    await controller.load();
+    expect(document.getElementById('overview-trend-message').hidden).toBe(false);
+
+    await controller.load();
+    expect(document.getElementById('overview-trend-message').hidden).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

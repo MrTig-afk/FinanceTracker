@@ -106,9 +106,11 @@ export function createOverviewTrend({ root = document, fetchFn } = {}) {
       _render(response);
     } catch {
       // Best-effort: never throw out of load() — the Overview donut must
-      // render regardless of a Trends fetch failure. Fixed safe message only.
+      // render regardless of a Trends fetch failure. Stay quiet: when the
+      // backend is unreachable the dashboard's own offline banner already
+      // explains the state, and a second line here reads as stacked noise.
       _destroyChart();
-      _showMessage('No spending history yet.');
+      _hideMessage();
     }
   }
 

@@ -670,6 +670,28 @@ describe('offline snapshot fallback', () => {
     expect(text).toContain('an earlier session');
     expect(text).not.toContain('Invalid Date');
   });
+
+  it('repeated showError() calls never accumulate banner text', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+
+    dash.showError(new ApiError('network error'));
+    const first = document.getElementById('message').textContent;
+
+    dash.showError(new ApiError('network error'));
+    dash.showError(new ApiError('network error'));
+    const third = document.getElementById('message').textContent;
+
+    expect(third).toBe(first);
+    expect(third.match(/Offline - showing data from/g)).toHaveLength(1);
+  });
+
+  it('the banner stays a single text node — no child elements ever appended', () => {
+    dash.render(SYNTHETIC_SUMMARY);
+    dash.showError(new ApiError('network error'));
+    dash.showError(new ApiError('network error'));
+
+    expect(document.getElementById('message').childElementCount).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
