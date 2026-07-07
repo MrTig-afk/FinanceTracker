@@ -35,6 +35,16 @@ except ImportError:  # run directly as a script: service/ is sys.path[0]
 except Exception:  # noqa: BLE001 — a broken backup module must never stop the supervisor
     backup = None  # type: ignore[assignment]
 
+try:
+    from service import reminder
+except ImportError:  # run directly as a script: service/ is sys.path[0]
+    try:
+        import reminder
+    except Exception:  # noqa: BLE001 — a broken reminder module must never stop the supervisor
+        reminder = None  # type: ignore[assignment]
+except Exception:  # noqa: BLE001 — a broken reminder module must never stop the supervisor
+    reminder = None  # type: ignore[assignment]
+
 REPO = Path(__file__).resolve().parent.parent
 PYTHON = REPO / "venv" / "Scripts" / "python.exe"
 DIST = REPO / "frontend" / "dist"
@@ -131,6 +141,13 @@ def main() -> None:
                     note(sup_log, message)
         except Exception as exc:  # backups must never break the supervisor loop
             note(sup_log, f"backup failed: {exc!r}")
+        try:
+            if reminder is not None:
+                message = reminder.run_reminder_if_due(REPO)
+                if message:
+                    note(sup_log, message)
+        except Exception as exc:  # the reminder must never break the supervisor loop
+            note(sup_log, f"reminder failed: {exc!r}")
         time.sleep(CHECK_INTERVAL)
 
 
