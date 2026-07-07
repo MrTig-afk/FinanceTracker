@@ -3,6 +3,7 @@
 Endpoints
 ---------
 POST /upload    Accept CommBank and/or Westpac CSVs as multipart form fields.
+GET  /health    Fixed {"ok": true} reachability probe (for the SW health check).
 GET  /status    Health + last-run summary (no sensitive content).
 GET  /summary   Monthly spending totals (latest or ?month=YYYY-MM).
 GET  /month     Monthly breakdown + month-over-month comparison (latest or ?ym=YYYY-MM).
@@ -20,6 +21,8 @@ POST /push/subscribe    Store a Web Push subscription locally (v2 Pass 3 scaffol
 POST /push/unsubscribe  Remove a stored Web Push subscription by endpoint.
 POST /notify/monthly-reminder  Fire the "new month, upload your statements" push
                 (for the always-on scheduler; fail-closed no-op when push is off).
+POST /notify/backup-failed  Fire the "local backup failed" push (for the
+                supervisor when the weekly local backup raises; same posture).
 GET  /settings  Owner preferences: corrections_enabled (Feature B gate, default OFF)
                 + per-type notification toggles (default ON).
 PUT  /settings  Partial update of the above (unknown notification keys ignored).
@@ -359,6 +362,21 @@ async def upload(
     app.state.last_run_at = datetime.now(timezone.utc)
 
     return dataclasses.asdict(report)
+
+
+# ---------------------------------------------------------------------------
+# GET /health  (reachability probe)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/health")
+async def health():
+    """Cheapest possible reachability probe: no store access, no data.
+
+    Exists for the service worker's periodic background health check (the
+    phone asking "is the laptop up?"). Returns a fixed body only.
+    """
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -838,6 +856,26 @@ async def notify_monthly_reminder():
     delivery problem. Carries NO transaction data (fixed status copy only).
     """
     sent = send_monthly_reminder(app.state.store)
+    return {"ok": True, "sent": sent}
+
+
+# ---------------------------------------------------------------------------
+# POST /notify/backup-failed  (supervisor -> owner: weekly local backup failed)
+# ---------------------------------------------------------------------------
+
+
+@app.post("/notify/backup-failed")
+async def notify_backup_failed():
+    """Push a "local backup failed" alert to the owner's devices.
+
+    Called by the always-on supervisor when the weekly local SQLite backup
+    raises; without this, the failure is visible only in logs/supervisor.log.
+
+    Same fail-closed posture as the monthly reminder: with push disabled /
+    placeholder VAPID keys / no subscriptions this is a silent no-op returning
+    {"ok": True, "sent": 0}. Fixed status copy only — no data, no error text.
+    """
+    sent = send_notification(app.state.store, "local_backup_failed")
     return {"ok": True, "sent": sent}
 
 

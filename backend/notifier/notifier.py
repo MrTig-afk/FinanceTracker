@@ -85,6 +85,7 @@ NOTIFICATION_TYPES = (
     "categorisation_recovered",
     "parse_error",
     "drive_backup_failed",
+    "local_backup_failed",
     "duplicate_noop",
     "generic_error",
     "monthly_reminder",
@@ -160,6 +161,9 @@ def build_notification(
         month = detail or "the latest month"
         title = "Backup failed"
         body = f"Backup to Drive failed for {month} - open the app to check."
+    elif ntype == "local_backup_failed":
+        title = "Local backup failed"
+        body = "The weekly local database backup failed - check the supervisor log."
     elif ntype == "duplicate_noop":
         title = "Nothing new"
         body = "Nothing new to process - this upload was already handled."

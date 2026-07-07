@@ -165,6 +165,7 @@ describe('routeRequest — every data endpoint is network-only', () => {
     '/category-override', '/category-context', '/subscriptions',
     '/corrections', '/settings', '/reclassify', '/reset',
     '/export/transactions.csv', '/push/subscribe', '/notify/monthly-reminder',
+    '/health',
   ];
   for (const p of dataPaths) {
     it(`GET ${p} → network-only`, () => {

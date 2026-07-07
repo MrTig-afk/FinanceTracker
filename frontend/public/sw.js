@@ -14,7 +14,7 @@
 
 'use strict';
 
-const CACHE = 'financetracker-shell-v3';
+const CACHE = 'financetracker-shell-v4';
 
 // App-shell files to pre-cache on install. The SVG marks are included so the
 // FinanceTracker/bank logos still render while the backend is unreachable.
@@ -36,6 +36,7 @@ const SHELL = [
 const API_PATHS = [
   '/upload',
   '/summary',
+  '/health',
   '/status',
   '/month',
   '/year',
@@ -118,7 +119,12 @@ self.addEventListener('activate', (e) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)),
+          keys
+            // Prune old shell generations, but keep the health-check state
+            // cache (see the periodic health check section below) across
+            // shell version bumps.
+            .filter((k) => k !== CACHE && k !== HEALTH_STATE_CACHE)
+            .map((k) => caches.delete(k)),
         ),
       ),
   );
@@ -274,6 +280,110 @@ self.addEventListener('push', (event) => {
         });
       }),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Periodic backend health check ("is the laptop up?"). Independent of the
+// routing/caching and push handlers above. Mirrors the pure, unit-tested
+// constants/helpers in src/swHealth.js — kept in sync manually, same
+// convention as routeRequest/swPush above.
+//
+// A laptop that is off cannot send a Web Push, so this alert is DEVICE-LOCAL:
+// the browser wakes this SW on its own schedule (periodicSync, Chromium
+// installed-PWA only), the SW probes GET /health with a short deadline, and on
+// failure raises a fixed status-only notification — at most one per 24h,
+// reset by the first successful probe. No data is read or sent.
+// ---------------------------------------------------------------------------
+const HEALTH_TAG = 'financetracker-health';
+const HEALTH_PATH = '/health';
+const HEALTH_TIMEOUT_MS = 5000;
+const HEALTH_ALERT_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+// State lives in its own Cache (a SW has no localStorage): one synthetic
+// entry whose body is {"lastAlertTs": <ms>}. activate() deliberately spares
+// this cache when pruning old shell generations, so a shell version bump
+// never resets the alert dedupe.
+const HEALTH_STATE_CACHE = 'financetracker-health-state';
+const HEALTH_STATE_KEY = '/__health-state';
+
+function healthShouldAlert(lastAlertTs, now) {
+  const last = typeof lastAlertTs === 'number' && Number.isFinite(lastAlertTs)
+    ? lastAlertTs
+    : null;
+  if (last === null) return true;
+  return now - last >= HEALTH_ALERT_MIN_INTERVAL_MS;
+}
+
+function readHealthState() {
+  return caches
+    .open(HEALTH_STATE_CACHE)
+    .then((c) => c.match(HEALTH_STATE_KEY))
+    .then((res) => (res ? res.text() : null))
+    .then((text) => {
+      if (!text) return null;
+      try {
+        const data = JSON.parse(text);
+        const ts = data && typeof data === 'object' ? data.lastAlertTs : null;
+        return typeof ts === 'number' && Number.isFinite(ts) ? ts : null;
+      } catch {
+        return null;
+      }
+    })
+    .catch(() => null);
+}
+
+function writeHealthState(ts) {
+  return caches
+    .open(HEALTH_STATE_CACHE)
+    .then((c) =>
+      c.put(HEALTH_STATE_KEY, new Response(JSON.stringify({ lastAlertTs: ts }))),
+    )
+    .catch(() => undefined);
+}
+
+function clearHealthState() {
+  return caches
+    .open(HEALTH_STATE_CACHE)
+    .then((c) => c.delete(HEALTH_STATE_KEY))
+    .catch(() => undefined);
+}
+
+function checkHealth() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+  return fetch(HEALTH_PATH, { signal: controller.signal, cache: 'no-store' })
+    .then((res) => {
+      clearTimeout(timer);
+      if (res && res.ok) return clearHealthState();
+      return handleHealthFailure();
+    })
+    .catch(() => {
+      clearTimeout(timer);
+      return handleHealthFailure();
+    });
+}
+
+function handleHealthFailure() {
+  return readHealthState().then((lastAlertTs) => {
+    if (!healthShouldAlert(lastAlertTs, Date.now())) return undefined;
+    return Promise.resolve()
+      .then(() =>
+        self.registration.showNotification("Can't reach the laptop", {
+          body:
+            "FinanceTracker couldn't reach your laptop - data in the app may be stale.",
+          icon: '/icon.svg',
+          badge: '/icon.svg',
+          tag: HEALTH_TAG,
+        }),
+      )
+      .catch(() => undefined) // notification permission may be absent
+      .then(() => writeHealthState(Date.now()));
+  });
+}
+
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === HEALTH_TAG) {
+    event.waitUntil(checkHealth());
+  }
 });
 
 self.addEventListener('notificationclick', (event) => {

@@ -27,6 +27,7 @@ import { createNotificationBridge } from './notifications.js';
 import { createCategoryDrawer } from './categoryDrawer.js';
 import { createMobileNav } from './mobileNav.js';
 import { createNavBadge } from './navBadge.js';
+import { initHealthWatch } from './healthWatch.js';
 
 // ---------------------------------------------------------------------------
 // Service worker (FR-3 — installable PWA), PRODUCTION ONLY.
@@ -38,9 +39,16 @@ import { createNavBadge } from './navBadge.js';
 if (import.meta.env.PROD) {
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        // SW registration failures are non-fatal (e.g. non-HTTPS dev, privacy mode).
-      });
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then(() => {
+          // Best-effort periodic "is the laptop up?" probe (Chromium installed
+          // PWA only; silent no-op elsewhere). See healthWatch.js.
+          initHealthWatch().catch(() => {});
+        })
+        .catch(() => {
+          // SW registration failures are non-fatal (e.g. non-HTTPS dev, privacy mode).
+        });
     });
   }
 } else {

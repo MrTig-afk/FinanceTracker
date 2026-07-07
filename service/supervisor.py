@@ -141,6 +141,14 @@ def main() -> None:
                     note(sup_log, message)
         except Exception as exc:  # backups must never break the supervisor loop
             note(sup_log, f"backup failed: {exc!r}")
+            # Best-effort push so the failure is not just a log line nobody
+            # reads. The backend runs on this same machine, so it is normally
+            # up whenever the supervisor is; if not, the log line above stands.
+            try:
+                if reminder is not None:
+                    reminder.post_notify(backend_port, "/notify/backup-failed")
+            except Exception:  # noqa: BLE001 — the alert must never break the loop
+                pass
         try:
             if reminder is not None:
                 message = reminder.run_reminder_if_due(REPO)

@@ -124,7 +124,7 @@ describe('notification toggles', () => {
     await controller.load();
 
     const toggles = document.querySelectorAll('.settings-notif-toggle');
-    expect(toggles.length).toBe(15);
+    expect(toggles.length).toBe(16);
 
     const byType = {};
     for (const t of toggles) byType[t.dataset.type] = t.checked;

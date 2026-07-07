@@ -1084,6 +1084,43 @@ class TestMonthlyReminderEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# TestBackupFailedEndpoint — POST /notify/backup-failed (supervisor alert)
+#
+# Same fail-closed posture as the monthly reminder: silent no-op with push
+# disabled, never raises, no data in the response.
+# ---------------------------------------------------------------------------
+
+
+class TestBackupFailedEndpoint:
+    def test_returns_ok_and_zero_when_push_disabled(self, api_client):
+        r = api_client.post("/notify/backup-failed")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "sent": 0}
+
+    def test_no_op_even_with_a_subscription_stored(self, api_client):
+        api_client.post("/push/subscribe", json=_SYNTH_SUBSCRIBE_BODY)
+        r = api_client.post("/notify/backup-failed")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True, "sent": 0}
+
+    def test_never_leaks_a_stacktrace(self, api_client):
+        r = api_client.post("/notify/backup-failed")
+        assert "Traceback" not in r.text
+
+
+# ---------------------------------------------------------------------------
+# TestHealth — GET /health (SW reachability probe)
+# ---------------------------------------------------------------------------
+
+
+class TestHealth:
+    def test_returns_fixed_ok_body(self, api_client):
+        r = api_client.get("/health")
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # TestUploadWasQueued — processed-vs-recovered decision helper (v4 Feature D)
 # ---------------------------------------------------------------------------
 

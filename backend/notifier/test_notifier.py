@@ -502,6 +502,16 @@ class TestBuildNotificationCatalog:
         p = build_notification("drive_backup_failed", detail="2026-06")
         assert "2026-06" in p["body"]
 
+    def test_local_backup_failed_is_fixed_status_copy(self):
+        p = build_notification("local_backup_failed")
+        assert p["title"] == "Local backup failed"
+        assert (
+            p["body"]
+            == "The weekly local database backup failed - check the supervisor log."
+        )
+        # Fixed copy only: nothing dynamic can leak (no counts, no paths).
+        assert not any(ch.isdigit() for ch in p["body"])
+
     def test_duplicate_noop_is_quiet_status_only(self):
         p = build_notification("duplicate_noop")
         assert p["type"] == "duplicate_noop"

@@ -18,6 +18,7 @@
 export const API_PATHS = [
   '/upload',
   '/summary',
+  '/health',
   '/status',
   '/month',
   '/year',

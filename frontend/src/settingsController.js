@@ -36,6 +36,7 @@ const NOTIFICATION_TYPES = [
   ['categorisation_recovered', 'Sorting caught up'],
   ['parse_error', 'Could not read a file'],
   ['drive_backup_failed', 'Drive backup failed'],
+  ['local_backup_failed', 'Local backup failed'],
   ['duplicate_noop', 'Duplicate upload skipped'],
   ['generic_error', 'Something went wrong'],
   ['monthly_reminder', 'Monthly upload reminder'],
