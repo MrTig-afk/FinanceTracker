@@ -158,7 +158,7 @@ All backend config lives in `.env` (gitignored). Copy `.env.example` and fill it
 | `OPENROUTER_FALLBACK_MODEL` | Fallback free model, used on error, 429, or unparseable JSON. |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Path to a Drive service-account key file (optional). Upload is skipped if absent. |
 | `DRIVE_FOLDER_ID` | Target Drive folder for the workbook (optional). |
-| `SQLITE_PATH`, `INBOX_DIR`, `OUTPUT_DIR`, `LOG_DIR` | Local paths, all gitignored. |
+| `SQLITE_PATH`, `OUTPUT_DIR`, `LOG_DIR` | Local paths, all gitignored. |
 | `BACKEND_HOST`, `BACKEND_PORT` | Bind address and port (examples in this readme use `8010`). |
 | `CORS_ALLOW_ORIGINS` | Comma-separated origins allowed to call the API. Set your tailnet URL here for phone access. |
 | `PUSH_ENABLED`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Web Push notifications. Fully inert while `PUSH_ENABLED=false`. |
