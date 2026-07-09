@@ -63,6 +63,5 @@ SETUP.md
 frontend/README.md
 service/README.md
 
-# ── Portfolio screenshots (synthetic data; only the README hero is tracked) ──
-screenshots/*
-!screenshots/financetracker-overview-dark.png
+# ── Portfolio screenshots (local only; the README hero lives in .github/) ──
+screenshots/

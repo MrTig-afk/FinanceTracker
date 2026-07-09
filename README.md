@@ -5,7 +5,7 @@ A private, self-hosted personal finance tracker. It turns monthly Commonwealth B
 You run it on your own machine, with your own API keys. Nothing here is a hosted service: you bring the keys and the data, and all of the data stays on your hardware.
 
 <p align="center">
-  <img src="screenshots/financetracker-overview-dark.png" alt="FinanceTracker overview screen: dark theme, spending donut and category breakdown (synthetic demo data)" width="340">
+  <img src=".github/financetracker-overview-dark.png" alt="FinanceTracker overview screen: dark theme, spending donut and category breakdown (synthetic demo data)" width="340">
 </p>
 
 *The screenshot uses synthetic demo data generated in code, no real transactions, in keeping with the rest of the repo.*

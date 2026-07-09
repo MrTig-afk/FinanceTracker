@@ -6,7 +6,7 @@ Reads OPENROUTER_API_KEY from the environment or a local .env — never hardcode
 Zero dependencies (stdlib only).
 
 Usage:
-    python scripts/check_openrouter.py
+    python service/check_openrouter.py
 """
 import json
 import os
