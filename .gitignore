@@ -53,6 +53,9 @@ local/
 linkedin-posts.md
 .design-handoff/
 
+# ── The portfolio site (its own separate git repo, parked here locally) ──
+Portfolio/
+
 # ── Local always-on deploy helpers (machine-specific; kept off the repo) ──
 service/run-web.ps1
 service/run-all.ps1

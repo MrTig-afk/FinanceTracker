@@ -36,7 +36,13 @@ import { initHealthWatch } from './healthWatch.js';
 // session left behind. Vite statically replaces import.meta.env.PROD, so only one
 // branch survives in each build.
 // ---------------------------------------------------------------------------
-if (import.meta.env.PROD) {
+// The PUBLIC DEMO build (VITE_DEMO=1, synthetic data, no backend) must never
+// register the service worker: its offline shell, /health periodic probes,
+// and push handlers all assume the self-hosted backend exists. The dev-mode
+// scrub branch below then also runs in demo, which is exactly right.
+const IS_DEMO = Boolean(import.meta.env.VITE_DEMO);
+
+if (import.meta.env.PROD && !IS_DEMO) {
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker
@@ -68,6 +74,9 @@ if (import.meta.env.PROD) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Demo badge visibility gate (styles.css shows .demo-badge only under .is-demo).
+  if (IS_DEMO) document.body.classList.add('is-demo');
+
   createMobileNav({ root: document });
   // onChanged fires after a manual category override; reuse load() so the
   // Overview summary/donut (and mini-trend) re-render with the corrected totals.
@@ -219,9 +228,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Upload queue (FR-4) — IndexedDB-backed with memory fallback.
   // -------------------------------------------------------------------------
   const queue = createQueue(); // default: createIdbStore() with memory fallback
+  // In the demo build there is no backend: uploads "succeed" instantly against
+  // the synthetic dataset instead of POSTing anywhere.
+  const uploadPostFn = IS_DEMO ? async () => ({ ok: true }) : (form) => postUpload(form);
   createUploadController({
     root: document,
     queue,
+    postFn: uploadPostFn,
     onUploaded: load,
     // Targets Overview BY VIEW NAME ('overview'), not by nav position — so the
     // nav reorder (Upload, Overview, Monthly, Yearly, ...) never breaks this.
@@ -230,7 +243,7 @@ document.addEventListener('DOMContentLoaded', () => {
   queue.start();
 
   // Drain anything queued from a previous offline session.
-  queue.flush({ postFn: (form) => postUpload(form) }).catch(() => {});
+  queue.flush({ postFn: uploadPostFn }).catch(() => {});
 
   // -------------------------------------------------------------------------
   // Push notifications (v2 Pass 3 — inert scaffold). Degrades gracefully when
