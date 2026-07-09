@@ -48,10 +48,9 @@ dist/
 # ── Local scratch files allowed to hold hardcoded keys (never committed) ──
 *.local.py
 
-# ── Local personal notes / write-ups (never committed or pushed) ──
-linkedin/
+# ── Owner-local content (notes, drafts, design assets, screenshots) ──
+local/
 linkedin-posts.md
-OVERNIGHT_NOTES.md
 .design-handoff/
 
 # ── Local always-on deploy helpers (machine-specific; kept off the repo) ──
@@ -62,6 +61,3 @@ service/run-all.ps1
 SETUP.md
 frontend/README.md
 service/README.md
-
-# ── Portfolio screenshots (local only; the README hero lives in .github/) ──
-screenshots/
