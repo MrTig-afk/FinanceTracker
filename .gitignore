@@ -64,3 +64,5 @@ service/run-all.ps1
 SETUP.md
 frontend/README.md
 service/README.md
+.code-review-graph/
+.mcp.json
