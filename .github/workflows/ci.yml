@@ -80,8 +80,13 @@ jobs:
   # paid and the owner promotes it.
   lint:
     name: Ruff lint (non-gating)
-    # continue-on-error: the job is a debt METER. Without this, every push
-    # to main emails the owner a red run for debt that is not gating.
+    # MUTE BUTTON, NOT A FIX (2026-08-20). continue-on-error makes this job
+    # report SUCCESS to the checks API - a check that structurally cannot
+    # fail. It silences the red-run email for the 11 known ruff findings.
+    # NEVER promote this job to a required branch-protection context while
+    # this line exists: a required check that cannot fail is worse than no
+    # check, because it reads as coverage. Exit condition: fix the 11,
+    # then delete this line.
     continue-on-error: true
     permissions:
       contents: read
