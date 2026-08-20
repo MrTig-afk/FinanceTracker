@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import pytest
 
 from backend.drive_uploader import is_configured, upload_file
 

@@ -152,7 +152,7 @@ class TestHardNoOpByDefault:
 
     def test_pywebpush_not_imported(self, monkeypatch):
         """A fake pywebpush that raises AssertionError if called proves zero network."""
-        fake = _install_fake_pywebpush(monkeypatch)
+        _install_fake_pywebpush(monkeypatch)
         store = FakeStore([_SYNTH_SUB_1])
         send_processed_notification(store)  # must not raise (webpush never invoked)
 

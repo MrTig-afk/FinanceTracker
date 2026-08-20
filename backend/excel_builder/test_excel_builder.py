@@ -12,7 +12,6 @@ from decimal import Decimal
 from pathlib import Path
 
 import openpyxl
-import pytest
 
 from backend.store import MonthRow
 from backend.excel_builder import build_workbook, resolve_output_dir

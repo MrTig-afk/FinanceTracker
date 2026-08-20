@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-import pytest
 
 from backend.data_source import Bank, Transaction
 from backend.idempotency import (

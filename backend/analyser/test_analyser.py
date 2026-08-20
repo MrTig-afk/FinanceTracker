@@ -17,7 +17,6 @@ from backend.analyser import (
     categorise,
     build_context_prompt,
     OpenRouterClient,
-    AnalysisResult,
     AnalyserError,
 )
 from backend.analyser.analyser import build_prompt
@@ -576,14 +575,14 @@ class TestEmptyPayload:
     def test_empty_list_zero_http_calls(self):
         """Passing an empty list makes zero HTTP calls."""
         recorder = RecordingPostFn([])  # any call would raise AssertionError
-        result = categorise([], client=_make_client(recorder))
+        categorise([], client=_make_client(recorder))
 
         assert len(recorder.calls) == 0
 
     def test_empty_sanitise_result_zero_http_calls(self):
         sr = _make_sanitise_result(payload=(), dropped=())
         recorder = RecordingPostFn([])
-        result = categorise(sr, client=_make_client(recorder))
+        categorise(sr, client=_make_client(recorder))
 
         assert len(recorder.calls) == 0
 
@@ -591,7 +590,7 @@ class TestEmptyPayload:
         """Dropped rows are handled locally — still no HTTP call with empty payload."""
         sr = _make_sanitise_result(payload=(), dropped=(7,))
         recorder = RecordingPostFn([])
-        result = categorise(sr, client=_make_client(recorder))
+        categorise(sr, client=_make_client(recorder))
 
         assert len(recorder.calls) == 0
 
