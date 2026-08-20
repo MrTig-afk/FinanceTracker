@@ -1,0 +1,6 @@
+# CodeRabbit is this repo's automatic PR review layer - free on public repos,
+# zero Claude tokens. `assertive` because the default `chill` produced zero
+# findings on diffs that contained findable issues elsewhere in this account.
+# Config is read from the PR HEAD branch. Valid: quiet | chill | assertive.
+reviews:
+  profile: assertive
