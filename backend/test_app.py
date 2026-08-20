@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -109,7 +110,7 @@ def api_client(tmp_path, fake_analyser, monkeypatch):
         yield client
 
 
-def _upload_both(client: TestClient) -> "requests.Response":  # type: ignore[name-defined]
+def _upload_both(client: TestClient) -> httpx.Response:
     """POST synthetic CommBank + Westpac CSVs to /upload."""
     return client.post(
         "/upload",

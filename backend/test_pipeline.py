@@ -1180,9 +1180,9 @@ class TestSplitwiseTagging:
 # we monkeypatch pipeline.send_notification to capture (type, kwargs) per trigger.
 # ---------------------------------------------------------------------------
 
-import backend.pipeline as pipeline_module
+import backend.pipeline as pipeline_module  # noqa: E402 - deliberate mid-file section import (see divider above)
 
-from backend.analyser import AnalyserError
+from backend.analyser import AnalyserError  # noqa: E402 - same section
 
 
 class _FailingAnalyserClient:
