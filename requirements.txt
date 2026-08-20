@@ -2,26 +2,26 @@
 # Pin major versions for reproducibility; all run locally except OpenRouter/Drive calls.
 
 # Web service
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-python-multipart==0.0.20
+fastapi==0.141.1
+uvicorn[standard]==0.52.3
+python-multipart==0.0.32
 
 # Config
-python-dotenv==1.0.1
+python-dotenv==1.2.3
 
 # HTTP client (OpenRouter)
-requests==2.32.3
+requests==2.34.2
 
 # Excel
 openpyxl==3.1.5
 
 # Google Drive (service account upload)
-google-api-python-client==2.156.0
-google-auth==2.37.0
+google-api-python-client==2.198.0
+google-auth==2.56.3
 
 # Web Push notifications (VAPID). Only used when PUSH_ENABLED=true with real keys;
 # lazy-imported on the enabled send path so an inert install never loads it.
-pywebpush==2.3.0
+pywebpush==2.4.0
 
 # Tests
 pytest==8.3.4
