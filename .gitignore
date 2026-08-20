@@ -64,5 +64,6 @@ service/run-all.ps1
 SETUP.md
 frontend/README.md
 service/README.md
+PROJECT_RUNDOWN.md
 .code-review-graph/
 .mcp.json
