@@ -74,10 +74,9 @@ jobs:
           --config p/javascript
           --config p/secrets
 
-  # Deliberately NOT a required branch-protection context: wiring a linter
-  # into a protected repo via a required job would turn main red the moment
-  # it lands. This job measures the debt; it gates nothing until the debt is
-  # paid and the owner promotes it.
+  # Not a required branch-protection context YET. The debt is paid (ruff 0.9.2
+  # reports 0 findings) and this job now fails the run on any finding - it is a
+  # real gate, just not a merge-blocking one. Promoting it is the owner's call.
   lint:
     name: Ruff lint
     permissions:
