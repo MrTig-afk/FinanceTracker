@@ -80,6 +80,9 @@ jobs:
   # paid and the owner promotes it.
   lint:
     name: Ruff lint (non-gating)
+    # continue-on-error: the job is a debt METER. Without this, every push
+    # to main emails the owner a red run for debt that is not gating.
+    continue-on-error: true
     permissions:
       contents: read
     runs-on: ubuntu-latest
