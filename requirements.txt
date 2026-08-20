@@ -10,7 +10,7 @@ python-multipart==0.0.20
 python-dotenv==1.0.1
 
 # HTTP client (OpenRouter)
-requests==2.32.3
+requests==2.33.0
 
 # Excel
 openpyxl==3.1.5
