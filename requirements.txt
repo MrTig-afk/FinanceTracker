@@ -3,7 +3,7 @@
 
 # Web service
 fastapi==0.141.1
-uvicorn[standard]==0.52.3
+uvicorn[standard]==0.52.4
 python-multipart==0.0.32
 
 # Config
@@ -16,12 +16,12 @@ requests==2.34.2
 openpyxl==3.1.5
 
 # Google Drive (service account upload)
-google-api-python-client==2.198.0
-google-auth==2.56.3
+google-api-python-client==2.199.0
+google-auth==2.57.0
 
 # Web Push notifications (VAPID). Only used when PUSH_ENABLED=true with real keys;
 # lazy-imported on the enabled send path so an inert install never loads it.
-pywebpush==2.4.0
+pywebpush==2.5.0
 
 # Tests
 pytest==8.3.4
