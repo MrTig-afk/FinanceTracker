@@ -10,11 +10,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "chart.js": "^4.4.0"
+    "chart.js": "^4.6.1"
   },
   "devDependencies": {
     "jsdom": "^25.0.0",
-    "vite": "^8.2.1",
+    "vite": "^8.3.5",
     "vitest": "^4.1.10"
   }
 }
